@@ -11,9 +11,13 @@ insert into public.clients (id, name, slug, contact_email, status) values
   ('22222222-2222-2222-2222-222222222222', 'Cliente Dos', 'cliente-dos', 'contacto@clientedos.test', 'active')
 on conflict (id) do nothing;
 
-insert into public.sites (id, client_id, name, url, platform) values
-  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '11111111-1111-1111-1111-111111111111', 'Web principal Cliente Uno', 'https://clienteuno.test', 'wordpress'),
-  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '22222222-2222-2222-2222-222222222222', 'Web principal Cliente Dos', 'https://clientedos.test', 'wordpress')
+-- monitoring_enabled = false: son dominios .test que no resuelven por DNS. Con
+-- el recolector real (fase 3) comprobándolas de verdad, quedarían "caídas"
+-- para siempre y el recolector abriría una incidencia que nunca se cierra
+-- (fase 4). Sirven para RLS (fase 1), no para monitorización real.
+insert into public.sites (id, client_id, name, url, platform, monitoring_enabled) values
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '11111111-1111-1111-1111-111111111111', 'Web principal Cliente Uno', 'https://clienteuno.test', 'wordpress', false),
+  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '22222222-2222-2222-2222-222222222222', 'Web principal Cliente Dos', 'https://clientedos.test', 'wordpress', false)
 on conflict (id) do nothing;
 
 insert into public.checks (site_id, checked_at, ok, status_code, response_ms) values
