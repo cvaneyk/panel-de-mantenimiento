@@ -1,0 +1,111 @@
+{
+  "name": "Recolector A — Uptime",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Recolector A — uptime (fase 3 del SPEC)\n\nAntes de activar, define en este entorno de n8n (Coolify → variables de entorno del contenedor de n8n, no en el workflow):\n\n- `SUPABASE_URL` — la URL del proyecto (https://xxxx.supabase.co)\n- `SUPABASE_SERVICE_ROLE_KEY` — la service_role key. Nunca se escribe en este JSON ni en ningún nodo: solo vive aquí como variable de entorno del contenedor de n8n (regla 2 del CLAUDE.md).\n\nSi tu instancia de n8n bloquea el acceso a variables de entorno desde expresiones (`N8N_BLOCK_ENV_ACCESS_IN_NODE=true`), créalas como credenciales de n8n en su lugar y sustituye las cabeceras `apikey`/`Authorization` de los dos nodos HTTP Request por esa credencial.",
+        "height": 320,
+        "width": 460
+      },
+      "id": "6b1f6f3a-0a1a-4b7a-9a1a-note000000001",
+      "name": "Notas",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [240, 20]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "6b1f6f3a-0a1a-4b7a-9a1a-trigger000001",
+      "name": "Cada 5 minutos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 400]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/sites",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "monitoring_enabled", "value": "eq.true" },
+            { "name": "select", "value": "id,url" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{$env.SUPABASE_SERVICE_ROLE_KEY}}" },
+            { "name": "Authorization", "value": "=Bearer {{$env.SUPABASE_SERVICE_ROLE_KEY}}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6b1f6f3a-0a1a-4b7a-9a1a-getsites00001",
+      "name": "Obtener webs activas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Una web por ejecución (modo \"Run Once for Each Item\"). Se mide el\n// tiempo de respuesta a mano porque el nodo HTTP Request no lo expone, y\n// se captura cualquier fallo de red como \"caída\" en vez de romper el flujo\n// (equivalente a Continue On Fail, pero con control total del resultado).\nconst site = $input.item.json;\nconst start = Date.now();\n\nlet ok = false;\nlet statusCode = null;\nlet responseMs = null;\nlet error = null;\n\ntry {\n  const response = await this.helpers.httpRequest({\n    method: 'GET',\n    url: site.url,\n    timeout: 10000,\n    returnFullResponse: true,\n    ignoreHttpStatusErrors: true,\n  });\n  responseMs = Date.now() - start;\n  statusCode = response.statusCode;\n  ok = statusCode >= 200 && statusCode < 400;\n  if (!ok) {\n    error = `HTTP ${statusCode}`;\n  }\n} catch (err) {\n  responseMs = Date.now() - start;\n  error = (err && err.message) ? err.message.slice(0, 500) : 'Error de red';\n}\n\nreturn {\n  json: {\n    site_id: site.id,\n    ok,\n    status_code: statusCode,\n    response_ms: responseMs,\n    error,\n  },\n};\n"
+      },
+      "id": "6b1f6f3a-0a1a-4b7a-9a1a-checksite0001",
+      "name": "Comprobar disponibilidad",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/checks",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{$env.SUPABASE_SERVICE_ROLE_KEY}}" },
+            { "name": "Authorization", "value": "=Bearer {{$env.SUPABASE_SERVICE_ROLE_KEY}}" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { site_id: $json.site_id, ok: $json.ok, status_code: $json.status_code, response_ms: $json.response_ms, error: $json.error } }}",
+        "options": {}
+      },
+      "id": "6b1f6f3a-0a1a-4b7a-9a1a-savecheck0001",
+      "name": "Guardar comprobación",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 400]
+    }
+  ],
+  "connections": {
+    "Cada 5 minutos": {
+      "main": [[{ "node": "Obtener webs activas", "type": "main", "index": 0 }]]
+    },
+    "Obtener webs activas": {
+      "main": [[{ "node": "Comprobar disponibilidad", "type": "main", "index": 0 }]]
+    },
+    "Comprobar disponibilidad": {
+      "main": [[{ "node": "Guardar comprobación", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

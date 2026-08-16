@@ -34,3 +34,13 @@ export type Site = {
   monitoring_enabled: boolean;
   created_at: string;
 };
+
+export type Check = {
+  id: number;
+  site_id: string;
+  checked_at: string;
+  ok: boolean;
+  status_code: number | null;
+  response_ms: number | null;
+  error: string | null;
+};

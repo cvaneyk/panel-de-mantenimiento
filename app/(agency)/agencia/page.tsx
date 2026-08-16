@@ -1,4 +1,8 @@
+import { computeSiteStatus } from "@/lib/metrics/status";
+import { formatDateTimeMadrid } from "@/lib/format";
 import { createClient } from "@/lib/supabase/server";
+import { SiteStatusBadge } from "@/components/site-status-badge";
+import type { Check } from "@/lib/supabase/types";
 import { inviteMember } from "./actions";
 
 type ClientRow = {
@@ -7,6 +11,14 @@ type ClientRow = {
   contact_email: string;
   status: string;
   sites: { count: number }[];
+};
+
+type SiteRow = {
+  id: string;
+  name: string;
+  url: string;
+  client: { name: string } | null;
+  checks: Check[];
 };
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -25,22 +37,97 @@ export default async function AgenciaPage({
   const { error, ok } = await searchParams;
   const supabase = await createClient();
 
-  const { data: clients } = await supabase
-    .from("clients")
-    .select("id, name, contact_email, status, sites(count)")
-    .order("name")
-    .returns<ClientRow[]>();
+  const [{ data: sites }, { data: clients }] = await Promise.all([
+    supabase
+      .from("sites")
+      .select("id, name, url, client:clients(name), checks(id, site_id, checked_at, ok, status_code, response_ms, error)")
+      .order("checked_at", { referencedTable: "checks", ascending: false })
+      .limit(3, { referencedTable: "checks" })
+      .order("name")
+      .returns<SiteRow[]>(),
+    supabase
+      .from("clients")
+      .select("id, name, contact_email, status, sites(count)")
+      .order("name")
+      .returns<ClientRow[]>(),
+  ]);
 
   return (
     <div className="space-y-10">
       <section>
-        <h1 className="text-xl font-semibold">Clientes</h1>
+        <h1 className="text-xl font-semibold">Webs</h1>
         <p className="mt-1 text-sm text-[var(--color-text-muted)]">
-          Todos los clientes de la agencia. La monitorización de sus webs
-          empieza en la fase 3.
+          Todas las webs de todos los clientes, con su estado más reciente.
         </p>
 
         <div className="mt-6 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-text-muted)]">
+                <th className="px-4 py-2 font-medium">Web</th>
+                <th className="px-4 py-2 font-medium">Cliente</th>
+                <th className="px-4 py-2 font-medium">Estado</th>
+                <th className="px-4 py-2 font-medium tabular-nums">Respuesta</th>
+                <th className="px-4 py-2 font-medium">Última comprobación</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sites?.length ? (
+                sites.map((site) => {
+                  const summary = computeSiteStatus(site.checks);
+                  return (
+                    <tr
+                      key={site.id}
+                      className="border-b border-[var(--color-border)] last:border-0"
+                    >
+                      <td className="px-4 py-2">
+                        <a
+                          href={site.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-medium hover:underline"
+                        >
+                          {site.name}
+                        </a>
+                      </td>
+                      <td className="px-4 py-2 text-[var(--color-text-muted)]">
+                        {site.client?.name ?? "—"}
+                      </td>
+                      <td className="px-4 py-2">
+                        <SiteStatusBadge status={summary.status} />
+                      </td>
+                      <td className="px-4 py-2 tabular-nums">
+                        {summary.lastResponseMs !== null
+                          ? `${summary.lastResponseMs} ms`
+                          : "—"}
+                      </td>
+                      <td className="px-4 py-2 text-[var(--color-text-muted)]">
+                        {summary.lastCheckedAt
+                          ? formatDateTimeMadrid(summary.lastCheckedAt)
+                          : "Sin comprobaciones todavía"}
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td
+                    colSpan={5}
+                    className="px-4 py-6 text-center text-[var(--color-text-muted)]"
+                  >
+                    No hay webs dadas de alta todavía.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2 className="text-lg font-semibold">Clientes</h2>
+
+        <div className="mt-4 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-text-muted)]">
