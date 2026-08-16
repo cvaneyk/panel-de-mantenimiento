@@ -44,3 +44,13 @@ export type Check = {
   response_ms: number | null;
   error: string | null;
 };
+
+export type Incident = {
+  id: number;
+  site_id: string;
+  opened_at: string;
+  resolved_at: string | null;
+  kind: "down" | "ssl_expiring" | "slow";
+  severity: string;
+  detail: string | null;
+};

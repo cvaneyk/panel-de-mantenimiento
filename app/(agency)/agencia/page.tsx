@@ -1,5 +1,5 @@
 import { computeSiteStatus } from "@/lib/metrics/status";
-import { formatDateTimeMadrid } from "@/lib/format";
+import { formatDateTimeMadrid, formatDurationSince } from "@/lib/format";
 import { createClient } from "@/lib/supabase/server";
 import { SiteStatusBadge } from "@/components/site-status-badge";
 import type { Check } from "@/lib/supabase/types";
@@ -21,6 +21,20 @@ type SiteRow = {
   checks: Check[];
 };
 
+const INCIDENT_KIND_LABELS: Record<string, string> = {
+  down: "Caída",
+  ssl_expiring: "SSL a punto de caducar",
+  slow: "Web lenta",
+};
+
+type OpenIncidentRow = {
+  id: number;
+  opened_at: string;
+  kind: string;
+  detail: string | null;
+  site: { name: string; url: string; client: { name: string } | null } | null;
+};
+
 const ERROR_MESSAGES: Record<string, string> = {
   faltan_datos: "Indica un cliente y un email para invitar.",
   email_ya_invitado: "Ese email ya tiene una invitación o una cuenta.",
@@ -37,7 +51,7 @@ export default async function AgenciaPage({
   const { error, ok } = await searchParams;
   const supabase = await createClient();
 
-  const [{ data: sites }, { data: clients }] = await Promise.all([
+  const [{ data: sites }, { data: clients }, { data: openIncidents }] = await Promise.all([
     supabase
       .from("sites")
       .select("id, name, url, client:clients(name), checks(id, site_id, checked_at, ok, status_code, response_ms, error)")
@@ -50,10 +64,48 @@ export default async function AgenciaPage({
       .select("id, name, contact_email, status, sites(count)")
       .order("name")
       .returns<ClientRow[]>(),
+    supabase
+      .from("incidents")
+      .select("id, opened_at, kind, detail, site:sites(name, url, client:clients(name))")
+      .is("resolved_at", null)
+      .order("opened_at", { ascending: false })
+      .returns<OpenIncidentRow[]>(),
   ]);
 
   return (
     <div className="space-y-10">
+      {openIncidents?.length ? (
+        <section>
+          <h2 className="text-lg font-semibold text-red-800">
+            Incidencias abiertas ({openIncidents.length})
+          </h2>
+          <ul className="mt-4 space-y-2">
+            {openIncidents.map((incident) => (
+              <li
+                key={incident.id}
+                className="flex items-center justify-between rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm"
+              >
+                <div>
+                  <span className="font-medium text-red-900">
+                    {incident.site?.name ?? "Web eliminada"}
+                  </span>
+                  <span className="ml-2 text-red-700">
+                    {incident.site?.client?.name ? `· ${incident.site.client.name}` : null}
+                  </span>
+                  <p className="mt-0.5 text-red-700">
+                    {INCIDENT_KIND_LABELS[incident.kind] ?? incident.kind}
+                    {incident.detail ? ` — ${incident.detail}` : ""}
+                  </p>
+                </div>
+                <span className="whitespace-nowrap text-red-700 tabular-nums">
+                  Abierta hace {formatDurationSince(incident.opened_at)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       <section>
         <h1 className="text-xl font-semibold">Webs</h1>
         <p className="mt-1 text-sm text-[var(--color-text-muted)]">

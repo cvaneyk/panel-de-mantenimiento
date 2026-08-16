@@ -3,8 +3,8 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## Recolector A — uptime (fase 3 del SPEC)\n\nAntes de activar, define en este entorno de n8n (Coolify → variables de entorno del contenedor de n8n, no en el workflow):\n\n- `SUPABASE_URL` — la URL del proyecto (https://xxxx.supabase.co)\n- `SUPABASE_SERVICE_ROLE_KEY` — la service_role key. Nunca se escribe en este JSON ni en ningún nodo: solo vive aquí como variable de entorno del contenedor de n8n (regla 2 del CLAUDE.md).\n\nSi tu instancia de n8n bloquea el acceso a variables de entorno desde expresiones (`N8N_BLOCK_ENV_ACCESS_IN_NODE=true`), créalas como credenciales de n8n en su lugar y sustituye las cabeceras `apikey`/`Authorization` de los dos nodos HTTP Request por esa credencial.",
-        "height": 320,
+        "content": "## Recolector A — uptime + incidencias (fases 3 y 4 del SPEC)\n\nAntes de activar, define en este entorno de n8n (Coolify → variables de entorno del contenedor de n8n, no en el workflow):\n\n- `SUPABASE_URL` — la URL del proyecto (https://xxxx.supabase.co)\n- `SUPABASE_SERVICE_ROLE_KEY` — la service_role key. Nunca se escribe en este JSON ni en ningún nodo: solo vive aquí como variable de entorno del contenedor de n8n (regla 2 del CLAUDE.md).\n- `TELEGRAM_BOT_TOKEN` — token del bot (BotFather).\n- `TELEGRAM_CHAT_ID` — chat al que llegan los avisos de caída/recuperación.\n\nSi tu instancia de n8n bloquea el acceso a variables de entorno desde expresiones (`N8N_BLOCK_ENV_ACCESS_IN_NODE=true`), créalas como credenciales de n8n en su lugar y sustituye las cabeceras/URLs de los nodos HTTP Request.\n\nLa regla de \"caída\" (3 comprobaciones consecutivas fallidas) vive por duplicado aquí y en `lib/metrics/constants.ts` del panel — son runtimes distintos (n8n vs. Next.js) y no hay forma de compartir código entre ambos sin una API intermedia, que el SPEC descarta explícitamente. Si cambia el umbral, cambia en los dos sitios.",
+        "height": 380,
         "width": 460
       },
       "id": "6b1f6f3a-0a1a-4b7a-9a1a-note000000001",
@@ -28,7 +28,7 @@
       "name": "Cada 5 minutos",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [240, 400]
+      "position": [240, 460]
     },
     {
       "parameters": {
@@ -38,7 +38,7 @@
         "queryParameters": {
           "parameters": [
             { "name": "monitoring_enabled", "value": "eq.true" },
-            { "name": "select", "value": "id,url" }
+            { "name": "select", "value": "id,name,url" }
           ]
         },
         "sendHeaders": true,
@@ -54,19 +54,19 @@
       "name": "Obtener webs activas",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [460, 400]
+      "position": [460, 460]
     },
     {
       "parameters": {
         "mode": "runOnceForEachItem",
         "language": "javaScript",
-        "jsCode": "// Una web por ejecución (modo \"Run Once for Each Item\"). Se mide el\n// tiempo de respuesta a mano porque el nodo HTTP Request no lo expone, y\n// se captura cualquier fallo de red como \"caída\" en vez de romper el flujo\n// (equivalente a Continue On Fail, pero con control total del resultado).\nconst site = $input.item.json;\nconst start = Date.now();\n\nlet ok = false;\nlet statusCode = null;\nlet responseMs = null;\nlet error = null;\n\ntry {\n  const response = await this.helpers.httpRequest({\n    method: 'GET',\n    url: site.url,\n    timeout: 10000,\n    returnFullResponse: true,\n    ignoreHttpStatusErrors: true,\n  });\n  responseMs = Date.now() - start;\n  statusCode = response.statusCode;\n  ok = statusCode >= 200 && statusCode < 400;\n  if (!ok) {\n    error = `HTTP ${statusCode}`;\n  }\n} catch (err) {\n  responseMs = Date.now() - start;\n  error = (err && err.message) ? err.message.slice(0, 500) : 'Error de red';\n}\n\nreturn {\n  json: {\n    site_id: site.id,\n    ok,\n    status_code: statusCode,\n    response_ms: responseMs,\n    error,\n  },\n};\n"
+        "jsCode": "// Una web por ejecución (modo \"Run Once for Each Item\"). Se mide el\n// tiempo de respuesta a mano porque el nodo HTTP Request no lo expone, y\n// se captura cualquier fallo de red como \"caída\" en vez de romper el flujo\n// (equivalente a Continue On Fail, pero con control total del resultado).\nconst site = $input.item.json;\nconst start = Date.now();\n\nlet ok = false;\nlet statusCode = null;\nlet responseMs = null;\nlet error = null;\n\ntry {\n  const response = await this.helpers.httpRequest({\n    method: 'GET',\n    url: site.url,\n    timeout: 10000,\n    returnFullResponse: true,\n    ignoreHttpStatusErrors: true,\n  });\n  responseMs = Date.now() - start;\n  statusCode = response.statusCode;\n  ok = statusCode >= 200 && statusCode < 400;\n  if (!ok) {\n    error = `HTTP ${statusCode}`;\n  }\n} catch (err) {\n  responseMs = Date.now() - start;\n  error = (err && err.message) ? err.message.slice(0, 500) : 'Error de red';\n}\n\nreturn {\n  json: {\n    site_id: site.id,\n    site_name: site.name,\n    site_url: site.url,\n    ok,\n    status_code: statusCode,\n    response_ms: responseMs,\n    error,\n  },\n};\n"
       },
       "id": "6b1f6f3a-0a1a-4b7a-9a1a-checksite0001",
       "name": "Comprobar disponibilidad",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [680, 400]
+      "position": [680, 460]
     },
     {
       "parameters": {
@@ -90,7 +90,60 @@
       "name": "Guardar comprobación",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [900, 400]
+      "position": [900, 460]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Abre o cierra la incidencia de \"caída\" para este site, comparando el\n// estado actual (últimas 3 comprobaciones) con si ya hay una incidencia\n// abierta. Misma regla de 3 fallos consecutivos que lib/metrics/status.ts.\nconst DOWN_AFTER_CONSECUTIVE_FAILURES = 3;\n\nconst check = $('Comprobar disponibilidad').item.json;\nconst baseUrl = $env.SUPABASE_URL;\nconst headers = {\n  apikey: $env.SUPABASE_SERVICE_ROLE_KEY,\n  Authorization: `Bearer ${$env.SUPABASE_SERVICE_ROLE_KEY}`,\n};\n\nconst recentChecks = await this.helpers.httpRequest({\n  method: 'GET',\n  url: `${baseUrl}/rest/v1/checks`,\n  qs: {\n    site_id: `eq.${check.site_id}`,\n    select: 'ok',\n    order: 'checked_at.desc',\n    limit: String(DOWN_AFTER_CONSECUTIVE_FAILURES),\n  },\n  headers,\n  json: true,\n});\n\nconst isDown =\n  recentChecks.length === DOWN_AFTER_CONSECUTIVE_FAILURES &&\n  recentChecks.every((c) => c.ok === false);\n\nconst openIncidents = await this.helpers.httpRequest({\n  method: 'GET',\n  url: `${baseUrl}/rest/v1/incidents`,\n  qs: {\n    site_id: `eq.${check.site_id}`,\n    kind: 'eq.down',\n    resolved_at: 'is.null',\n    select: 'id,opened_at',\n    order: 'opened_at.desc',\n    limit: '1',\n  },\n  headers,\n  json: true,\n});\nconst openIncident = openIncidents[0] ?? null;\n\nlet action = 'none';\nlet message = null;\n\nif (isDown && !openIncident) {\n  await this.helpers.httpRequest({\n    method: 'POST',\n    url: `${baseUrl}/rest/v1/incidents`,\n    headers: { ...headers, 'Content-Type': 'application/json', Prefer: 'return=minimal' },\n    body: {\n      site_id: check.site_id,\n      kind: 'down',\n      severity: 'critical',\n      detail: check.error,\n    },\n    json: true,\n  });\n  action = 'opened';\n  message = `🔴 ${check.site_name} no responde (${check.error ?? `HTTP ${check.status_code}`}).\\n${check.site_url}`;\n} else if (!isDown && openIncident) {\n  await this.helpers.httpRequest({\n    method: 'PATCH',\n    url: `${baseUrl}/rest/v1/incidents`,\n    qs: { id: `eq.${openIncident.id}` },\n    headers: { ...headers, 'Content-Type': 'application/json', Prefer: 'return=minimal' },\n    body: { resolved_at: new Date().toISOString() },\n    json: true,\n  });\n  const openedMinutes = Math.round((Date.now() - new Date(openIncident.opened_at).getTime()) / 60000);\n  action = 'closed';\n  message = `🟢 ${check.site_name} ha vuelto (caída de ${openedMinutes} min).\\n${check.site_url}`;\n}\n\nreturn { json: { action, message } };\n"
+      },
+      "id": "6b1f6f3a-0a1a-4b7a-9a1a-incident00001",
+      "name": "Gestionar incidencia",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 460]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "1a1a1a1a-0000-0000-0000-000000000001",
+              "leftValue": "={{$json.action}}",
+              "rightValue": "none",
+              "operator": { "type": "string", "operation": "notEquals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6b1f6f3a-0a1a-4b7a-9a1a-ifnotify0001",
+      "name": "¿Hay aviso?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1340, 460]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{$env.TELEGRAM_BOT_TOKEN}}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { chat_id: $env.TELEGRAM_CHAT_ID, text: $json.message } }}",
+        "options": {}
+      },
+      "id": "6b1f6f3a-0a1a-4b7a-9a1a-telegram0001",
+      "name": "Enviar aviso Telegram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, 380]
     }
   ],
   "connections": {
@@ -102,6 +155,18 @@
     },
     "Comprobar disponibilidad": {
       "main": [[{ "node": "Guardar comprobación", "type": "main", "index": 0 }]]
+    },
+    "Guardar comprobación": {
+      "main": [[{ "node": "Gestionar incidencia", "type": "main", "index": 0 }]]
+    },
+    "Gestionar incidencia": {
+      "main": [[{ "node": "¿Hay aviso?", "type": "main", "index": 0 }]]
+    },
+    "¿Hay aviso?": {
+      "main": [
+        [{ "node": "Enviar aviso Telegram", "type": "main", "index": 0 }],
+        []
+      ]
     }
   },
   "pinData": {},
