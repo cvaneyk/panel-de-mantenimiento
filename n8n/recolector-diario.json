@@ -1,0 +1,151 @@
+{
+  "name": "Recolector diario — SSL + CWV",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Recolector diario — SSL + Core Web Vitals (fase 5 del SPEC)\n\nVariables de entorno del contenedor de n8n (además de las de `recolector-uptime.json`):\n\n- `PAGESPEED_API_KEY` — clave de la PageSpeed Insights API (Google Cloud Console).\n- `NODE_FUNCTION_ALLOW_BUILTIN=tls` — necesario para que el nodo Code pueda abrir una conexión TLS y leer la caducidad del certificado. Por defecto n8n bloquea `require('tls')` en los nodos Code.\n\nSolo se guarda \"field data\" de CrUX (mediciones reales de usuarios de Chrome). Si Google no tiene tráfico suficiente de una web para tener field data, `lcp_ms`/`inp_ms`/`cls` se guardan como `null` — nunca se sustituye por el dato de laboratorio de Lighthouse, que no es tráfico real (regla 5 del CLAUDE.md: sin datos falsos).\n\nLa incidencia `ssl_expiring` usa el mismo umbral que `SSL_EXPIRING_WARNING_DAYS` en `lib/metrics/constants.ts` (14 días) — duplicado por la misma razón que la regla de \"caída\" en el recolector de uptime: son runtimes distintos.",
+        "height": 340,
+        "width": 480
+      },
+      "id": "8c2f6f3a-0a1a-4b7a-9a1a-note000000002",
+      "name": "Notas",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [240, 20]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 3,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "8c2f6f3a-0a1a-4b7a-9a1a-trigger000002",
+      "name": "Cada día a las 3:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 460]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/sites",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "monitoring_enabled", "value": "eq.true" },
+            { "name": "select", "value": "id,name,url" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{$env.SUPABASE_SERVICE_ROLE_KEY}}" },
+            { "name": "Authorization", "value": "=Bearer {{$env.SUPABASE_SERVICE_ROLE_KEY}}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8c2f6f3a-0a1a-4b7a-9a1a-getsites00002",
+      "name": "Obtener webs activas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 460]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Lee la caducidad real del certificado TLS y las Core Web Vitals de campo\n// (CrUX, vía PageSpeed Insights) de una web, y las guarda en metrics_daily\n// con upsert (site_id, day). Solo field data: si Google no tiene tráfico\n// real de esta web, se guarda null en vez de una estimación de laboratorio.\nconst tls = require('tls');\n\nfunction getCertExpiry(hostname, port = 443, timeout = 8000) {\n  return new Promise((resolve) => {\n    let settled = false;\n    const finish = (value) => {\n      if (!settled) {\n        settled = true;\n        resolve(value);\n      }\n    };\n    const socket = tls.connect(port, hostname, { servername: hostname, timeout }, () => {\n      const cert = socket.getPeerCertificate();\n      socket.end();\n      finish(cert && cert.valid_to ? new Date(cert.valid_to).toISOString() : null);\n    });\n    socket.on('error', () => finish(null));\n    socket.on('timeout', () => { socket.destroy(); finish(null); });\n  });\n}\n\nconst site = $input.item.json;\nconst hostname = new URL(site.url).hostname;\n\nconst sslExpiresAt = await getCertExpiry(hostname);\n\nlet lcpMs = null;\nlet inpMs = null;\nlet cls = null;\n\ntry {\n  const psi = await this.helpers.httpRequest({\n    method: 'GET',\n    url: 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed',\n    qs: { url: site.url, strategy: 'mobile', key: $env.PAGESPEED_API_KEY },\n    json: true,\n    timeout: 30000,\n    ignoreHttpStatusErrors: true,\n    returnFullResponse: true,\n  });\n  const metrics = psi.body && psi.body.loadingExperience && psi.body.loadingExperience.metrics;\n  if (metrics) {\n    if (metrics.LARGEST_CONTENTFUL_PAINT_MS) lcpMs = metrics.LARGEST_CONTENTFUL_PAINT_MS.percentile;\n    if (metrics.INTERACTION_TO_NEXT_PAINT) inpMs = metrics.INTERACTION_TO_NEXT_PAINT.percentile;\n    if (metrics.CUMULATIVE_LAYOUT_SHIFT_SCORE) cls = metrics.CUMULATIVE_LAYOUT_SHIFT_SCORE.percentile / 100;\n  }\n} catch (err) {\n  // Sin datos de PSI en esta ejecución: se queda en null, nunca un valor inventado.\n}\n\nconst today = new Date().toISOString().slice(0, 10);\n\nawait this.helpers.httpRequest({\n  method: 'POST',\n  url: `${$env.SUPABASE_URL}/rest/v1/metrics_daily`,\n  qs: { on_conflict: 'site_id,day' },\n  headers: {\n    apikey: $env.SUPABASE_SERVICE_ROLE_KEY,\n    Authorization: `Bearer ${$env.SUPABASE_SERVICE_ROLE_KEY}`,\n    'Content-Type': 'application/json',\n    Prefer: 'resolution=merge-duplicates,return=minimal',\n  },\n  body: {\n    site_id: site.id,\n    day: today,\n    ssl_expires_at: sslExpiresAt,\n    lcp_ms: lcpMs,\n    inp_ms: inpMs,\n    cls,\n  },\n  json: true,\n});\n\nreturn {\n  json: {\n    site_id: site.id,\n    site_name: site.name,\n    site_url: site.url,\n    ssl_expires_at: sslExpiresAt,\n    lcp_ms: lcpMs,\n    inp_ms: inpMs,\n    cls,\n  },\n};\n"
+      },
+      "id": "8c2f6f3a-0a1a-4b7a-9a1a-sslcwv000001",
+      "name": "Comprobar SSL y CWV",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 460]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Abre o cierra la incidencia informativa de \"SSL a punto de caducar\",\n// mismo patrón que la incidencia de caída del recolector de uptime.\nconst SSL_EXPIRING_WARNING_DAYS = 14;\n\nconst item = $('Comprobar SSL y CWV').item.json;\nconst baseUrl = $env.SUPABASE_URL;\nconst headers = {\n  apikey: $env.SUPABASE_SERVICE_ROLE_KEY,\n  Authorization: `Bearer ${$env.SUPABASE_SERVICE_ROLE_KEY}`,\n};\n\nlet action = 'none';\nlet message = null;\n\nif (item.ssl_expires_at) {\n  const daysLeft = Math.floor((new Date(item.ssl_expires_at).getTime() - Date.now()) / 86400000);\n\n  const openIncidents = await this.helpers.httpRequest({\n    method: 'GET',\n    url: `${baseUrl}/rest/v1/incidents`,\n    qs: {\n      site_id: `eq.${item.site_id}`,\n      kind: 'eq.ssl_expiring',\n      resolved_at: 'is.null',\n      select: 'id,opened_at',\n      order: 'opened_at.desc',\n      limit: '1',\n    },\n    headers,\n    json: true,\n  });\n  const openIncident = openIncidents[0] ?? null;\n\n  if (daysLeft <= SSL_EXPIRING_WARNING_DAYS && !openIncident) {\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: `${baseUrl}/rest/v1/incidents`,\n      headers: { ...headers, 'Content-Type': 'application/json', Prefer: 'return=minimal' },\n      body: {\n        site_id: item.site_id,\n        kind: 'ssl_expiring',\n        severity: 'info',\n        detail: `Caduca el ${item.ssl_expires_at}`,\n      },\n      json: true,\n    });\n    action = 'opened';\n    message = `⚠️ El SSL de ${item.site_name} caduca en ${daysLeft} días.\\n${item.site_url}`;\n  } else if (daysLeft > SSL_EXPIRING_WARNING_DAYS && openIncident) {\n    await this.helpers.httpRequest({\n      method: 'PATCH',\n      url: `${baseUrl}/rest/v1/incidents`,\n      qs: { id: `eq.${openIncident.id}` },\n      headers: { ...headers, 'Content-Type': 'application/json', Prefer: 'return=minimal' },\n      body: { resolved_at: new Date().toISOString() },\n      json: true,\n    });\n    action = 'closed';\n    message = `✅ El SSL de ${item.site_name} se ha renovado.\\n${item.site_url}`;\n  }\n}\n\nreturn { json: { action, message } };\n"
+      },
+      "id": "8c2f6f3a-0a1a-4b7a-9a1a-sslincid0001",
+      "name": "Gestionar incidencia SSL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 460]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "2b2b2b2b-0000-0000-0000-000000000001",
+              "leftValue": "={{$json.action}}",
+              "rightValue": "none",
+              "operator": { "type": "string", "operation": "notEquals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "8c2f6f3a-0a1a-4b7a-9a1a-ifnotify0002",
+      "name": "¿Hay aviso?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1120, 460]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{$env.TELEGRAM_BOT_TOKEN}}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { chat_id: $env.TELEGRAM_CHAT_ID, text: $json.message } }}",
+        "options": {}
+      },
+      "id": "8c2f6f3a-0a1a-4b7a-9a1a-telegram0002",
+      "name": "Enviar aviso Telegram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 380]
+    }
+  ],
+  "connections": {
+    "Cada día a las 3:00": {
+      "main": [[{ "node": "Obtener webs activas", "type": "main", "index": 0 }]]
+    },
+    "Obtener webs activas": {
+      "main": [[{ "node": "Comprobar SSL y CWV", "type": "main", "index": 0 }]]
+    },
+    "Comprobar SSL y CWV": {
+      "main": [[{ "node": "Gestionar incidencia SSL", "type": "main", "index": 0 }]]
+    },
+    "Gestionar incidencia SSL": {
+      "main": [[{ "node": "¿Hay aviso?", "type": "main", "index": 0 }]]
+    },
+    "¿Hay aviso?": {
+      "main": [
+        [{ "node": "Enviar aviso Telegram", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

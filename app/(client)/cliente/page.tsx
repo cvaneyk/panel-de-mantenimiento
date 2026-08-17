@@ -1,8 +1,9 @@
 import { computeSiteStatus } from "@/lib/metrics/status";
 import { formatDateTimeMadrid } from "@/lib/format";
+import { WORKLOG_CATEGORY_LABELS } from "@/lib/worklog-labels";
 import { createClient } from "@/lib/supabase/server";
 import { SiteStatusBadge } from "@/components/site-status-badge";
-import type { Check } from "@/lib/supabase/types";
+import type { Check, WorklogEntry } from "@/lib/supabase/types";
 
 type ClientWithSites = {
   id: string;
@@ -10,11 +11,27 @@ type ClientWithSites = {
   sites: { id: string; name: string; url: string; platform: string }[];
 };
 
-// Cuántas comprobaciones recientes se traen por sitio para calcular el
-// estado. No hay "top N por grupo" en PostgREST sin una función; con el
-// número de webs de un cliente en esta fase, traer las últimas N globales y
-// agrupar en JS es más simple que una consulta doblemente anidada.
+// Cuántas comprobaciones/entradas recientes se traen por sitio. No hay "top N
+// por grupo" en PostgREST sin una función; con el número de webs de un
+// cliente en esta fase, traer las últimas N globales y agrupar en JS es más
+// simple que una consulta doblemente anidada.
 const RECENT_CHECKS_PER_SITE = 3;
+const RECENT_WORKLOG_PER_SITE = 3;
+
+function groupBySite<T extends { site_id: string }>(
+  rows: T[] | null,
+  limitPerSite: number,
+): Map<string, T[]> {
+  const bySite = new Map<string, T[]>();
+  for (const row of rows ?? []) {
+    const existing = bySite.get(row.site_id) ?? [];
+    if (existing.length < limitPerSite) {
+      existing.push(row);
+      bySite.set(row.site_id, existing);
+    }
+  }
+  return bySite;
+}
 
 export default async function ClientePage() {
   const supabase = await createClient();
@@ -35,23 +52,30 @@ export default async function ClientePage() {
 
   const siteIds = clients.flatMap((client) => client.sites.map((site) => site.id));
 
-  const checksBySite = new Map<string, Check[]>();
-  if (siteIds.length > 0) {
-    const { data: checks } = await supabase
-      .from("checks")
-      .select("id, site_id, checked_at, ok, status_code, response_ms, error")
-      .in("site_id", siteIds)
-      .order("checked_at", { ascending: false })
-      .limit(RECENT_CHECKS_PER_SITE * siteIds.length)
-      .returns<Check[]>();
+  let checksBySite = new Map<string, Check[]>();
+  let worklogBySite = new Map<string, WorklogEntry[]>();
 
-    for (const check of checks ?? []) {
-      const existing = checksBySite.get(check.site_id) ?? [];
-      if (existing.length < RECENT_CHECKS_PER_SITE) {
-        existing.push(check);
-        checksBySite.set(check.site_id, existing);
-      }
-    }
+  if (siteIds.length > 0) {
+    const [{ data: checks }, { data: worklog }] = await Promise.all([
+      supabase
+        .from("checks")
+        .select("id, site_id, checked_at, ok, status_code, response_ms, error")
+        .in("site_id", siteIds)
+        .order("checked_at", { ascending: false })
+        .limit(RECENT_CHECKS_PER_SITE * siteIds.length)
+        .returns<Check[]>(),
+      // RLS ya filtra visible_to_client = true para el rol client.
+      supabase
+        .from("worklog")
+        .select("id, site_id, performed_at, author_id, category, summary, minutes, visible_to_client")
+        .in("site_id", siteIds)
+        .order("performed_at", { ascending: false })
+        .limit(RECENT_WORKLOG_PER_SITE * siteIds.length)
+        .returns<WorklogEntry[]>(),
+    ]);
+
+    checksBySite = groupBySite(checks, RECENT_CHECKS_PER_SITE);
+    worklogBySite = groupBySite(worklog, RECENT_WORKLOG_PER_SITE);
   }
 
   return (
@@ -69,6 +93,7 @@ export default async function ClientePage() {
             <ul className="mt-4 space-y-3">
               {client.sites.map((site) => {
                 const summary = computeSiteStatus(checksBySite.get(site.id) ?? []);
+                const recentWork = worklogBySite.get(site.id) ?? [];
                 return (
                   <li
                     key={site.id}
@@ -91,6 +116,25 @@ export default async function ClientePage() {
                         ? "Sin datos de monitorización todavía: la comprobación de disponibilidad está en marcha."
                         : `Última comprobación: ${formatDateTimeMadrid(summary.lastCheckedAt!)}.`}
                     </p>
+
+                    {recentWork.length > 0 ? (
+                      <div className="mt-3 border-t border-[var(--color-border)] pt-3">
+                        <p className="text-xs font-medium text-[var(--color-text-muted)]">
+                          Últimas actualizaciones
+                        </p>
+                        <ul className="mt-2 space-y-1.5">
+                          {recentWork.map((entry) => (
+                            <li key={entry.id} className="text-sm">
+                              <span className="text-[var(--color-text-muted)]">
+                                {formatDateTimeMadrid(entry.performed_at)} ·{" "}
+                                {WORKLOG_CATEGORY_LABELS[entry.category]} —{" "}
+                              </span>
+                              {entry.summary}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
                   </li>
                 );
               })}

@@ -12,6 +12,17 @@ export function formatDateTimeMadrid(iso: string): string {
   return MADRID_DATETIME.format(new Date(iso));
 }
 
+const MADRID_DATE = new Intl.DateTimeFormat("es-ES", {
+  timeZone: "Europe/Madrid",
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+});
+
+export function formatDateMadrid(iso: string): string {
+  return MADRID_DATE.format(new Date(iso));
+}
+
 export function formatDurationSince(iso: string): string {
   const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
   if (minutes < 60) return `${minutes} min`;

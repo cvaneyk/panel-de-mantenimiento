@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { computeSiteStatus } from "@/lib/metrics/status";
 import { formatDateTimeMadrid, formatDurationSince } from "@/lib/format";
 import { createClient } from "@/lib/supabase/server";
@@ -133,13 +134,20 @@ export default async function AgenciaPage({
                       className="border-b border-[var(--color-border)] last:border-0"
                     >
                       <td className="px-4 py-2">
+                        <Link
+                          href={`/agencia/webs/${site.id}`}
+                          className="font-medium hover:underline"
+                        >
+                          {site.name}
+                        </Link>
                         <a
                           href={site.url}
                           target="_blank"
                           rel="noreferrer"
-                          className="font-medium hover:underline"
+                          className="ml-1.5 text-xs text-[var(--color-text-muted)] hover:underline"
+                          aria-label={`Abrir ${site.url} en una pestaña nueva`}
                         >
-                          {site.name}
+                          ↗
                         </a>
                       </td>
                       <td className="px-4 py-2 text-[var(--color-text-muted)]">

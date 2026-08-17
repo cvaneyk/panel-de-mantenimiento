@@ -54,3 +54,35 @@ export type Incident = {
   severity: string;
   detail: string | null;
 };
+
+export type WorklogCategory =
+  | "update"
+  | "fix"
+  | "improvement"
+  | "content"
+  | "security";
+
+export type WorklogEntry = {
+  id: number;
+  site_id: string;
+  performed_at: string;
+  author_id: string;
+  category: WorklogCategory;
+  summary: string;
+  minutes: number | null;
+  visible_to_client: boolean;
+};
+
+export type MetricsDaily = {
+  site_id: string;
+  day: string;
+  uptime_pct: number | null;
+  checks_total: number | null;
+  checks_failed: number | null;
+  response_ms_avg: number | null;
+  response_ms_p95: number | null;
+  lcp_ms: number | null;
+  inp_ms: number | null;
+  cls: number | null;
+  ssl_expires_at: string | null;
+};
