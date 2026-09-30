@@ -2,9 +2,25 @@
 
 import { Suspense, useState, type FormEvent } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import { isAuthRetryableFetchError, type AuthError } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/browser";
 
 type Status = "idle" | "sending" | "error";
+
+// Solo decimos "credenciales incorrectas" cuando Supabase lo dice. Un fallo de
+// red o de configuración no es culpa de la contraseña y no debe parecerlo.
+function loginErrorMessage(error: AuthError): string {
+  if (error.code === "invalid_credentials") {
+    return "Email o contraseña incorrectos. Comprueba tus datos e inténtalo de nuevo.";
+  }
+  if (error.code === "email_not_confirmed") {
+    return "Tu email aún no está confirmado. Revisa tu bandeja de entrada o pide a la agencia que lo confirme.";
+  }
+  if (isAuthRetryableFetchError(error) || error.status === 0) {
+    return "No se ha podido conectar con el servidor de autenticación. Inténtalo más tarde o avisa a la agencia.";
+  }
+  return `No se ha podido iniciar sesión (${error.message}). Avisa a la agencia si se repite.`;
+}
 
 function InvalidLinkNotice() {
   const searchParams = useSearchParams();
@@ -37,9 +53,7 @@ export default function LoginPage() {
 
     if (error) {
       setStatus("error");
-      setErrorMessage(
-        "Email o contraseña incorrectos. Comprueba tus datos e inténtalo de nuevo.",
-      );
+      setErrorMessage(loginErrorMessage(error));
       return;
     }
 
