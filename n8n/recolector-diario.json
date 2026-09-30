@@ -3,15 +3,18 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## Recolector diario — SSL + Core Web Vitals (fase 5 del SPEC)\n\nVariables de entorno del contenedor de n8n (además de las de `recolector-uptime.json`):\n\n- `PAGESPEED_API_KEY` — clave de la PageSpeed Insights API (Google Cloud Console).\n\nEste workflow con task runners (n8n 2.x, modo external) necesita `require('tls')` y `require('url')` en el nodo Code. La variable clásica `NODE_FUNCTION_ALLOW_BUILTIN` como env var del contenedor de runners NO basta: hay que editarla dentro de `/etc/n8n-task-runners.json` (montado vía `configs:` en el docker-compose), en el `env-overrides` de la entrada `runner-type: javascript`, sin perder el resto de campos por defecto de esa entrada (`workdir`, `command`, `args`, `health-check-server-port`, `allowed-env`) ni la entrada del runner `python` — el launcher exige que el archivo declare todos los tipos de runner que gestiona. Valor final: `\"NODE_FUNCTION_ALLOW_BUILTIN\": \"crypto,tls,url\"` (crypto ya viene por defecto, no lo quites). Además el sandbox no expone `URL` como global: hay que hacer `const { URL } = require('url')` explícitamente, no basta con permitir el módulo.\n\nSolo se guarda \"field data\" de CrUX (mediciones reales de usuarios de Chrome). Si Google no tiene tráfico suficiente de una web para tener field data, `lcp_ms`/`inp_ms`/`cls` se guardan como `null` — nunca se sustituye por el dato de laboratorio de Lighthouse, que no es tráfico real (regla 5 del CLAUDE.md: sin datos falsos).\n\nLa incidencia `ssl_expiring` usa el mismo umbral que `SSL_EXPIRING_WARNING_DAYS` en `lib/metrics/constants.ts` (14 días) — duplicado por la misma razón que la regla de \"caída\" en el recolector de uptime: son runtimes distintos.",
-        "height": 340,
+        "content": "## Recolector diario — SSL + Core Web Vitals (fase 5 del SPEC)\n\nVariables de entorno del contenedor de n8n (además de las de `recolector-uptime.json`):\n\n- `PAGESPEED_API_KEY` — clave de la PageSpeed Insights API (Google Cloud Console).\n\nEste workflow con task runners (n8n 2.x, modo external) necesita `require('tls')` y `require('url')` en el nodo Code. La variable clásica `NODE_FUNCTION_ALLOW_BUILTIN` como env var del contenedor de runners NO basta: hay que editarla dentro de `/etc/n8n-task-runners.json` (montado vía `configs:` en el docker-compose), en el `env-overrides` de la entrada `runner-type: javascript`, sin perder el resto de campos por defecto de esa entrada (`workdir`, `command`, `args`, `health-check-server-port`, `allowed-env`) ni la entrada del runner `python` — el launcher exige que el archivo declare todos los tipos de runner que gestiona. Valor final: `\"NODE_FUNCTION_ALLOW_BUILTIN\": \"crypto,tls,url\"` (crypto ya viene por defecto, no lo quites). Además el sandbox no expone `URL` como global: hay que hacer `const { URL } = require('url')` explícitamente, no basta con permitir el módulo.\n\nSolo se guarda \"field data\" de CrUX (mediciones reales de usuarios de Chrome). Si Google no tiene tráfico suficiente de una web para tener field data, `lcp_ms`/`inp_ms`/`cls` se guardan como `null` — nunca se sustituye por el dato de laboratorio de Lighthouse, que no es tráfico real (regla 5 del CLAUDE.md: sin datos falsos).\n\nLa incidencia `ssl_expiring` usa el mismo umbral que `SSL_EXPIRING_WARNING_DAYS` en `lib/metrics/constants.ts` (14 días) — duplicado por la misma razón que la regla de \"caída\" en el recolector de uptime: son runtimes distintos.\n\n**Captura de la portada (fase 6).** De la misma respuesta de PageSpeed se toma `lighthouseResult.audits['final-screenshot']` y se sube a Storage (`site-screenshots/<site_id>/latest.jpg`, con upsert). Si el sandbox del task runner no expone `Buffer` como global, añade `buffer` a `NODE_FUNCTION_ALLOW_BUILTIN` igual que `tls` y `url`.",
+        "height": 440,
         "width": 480
       },
       "id": "8c2f6f3a-0a1a-4b7a-9a1a-note000000002",
       "name": "Notas",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [240, 20]
+      "position": [
+        240,
+        20
+      ]
     },
     {
       "parameters": {
@@ -30,7 +33,10 @@
       "name": "Cada día a las 3:00",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [240, 460]
+      "position": [
+        240,
+        460
+      ]
     },
     {
       "parameters": {
@@ -39,15 +45,27 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "monitoring_enabled", "value": "eq.true" },
-            { "name": "select", "value": "id,name,url" }
+            {
+              "name": "monitoring_enabled",
+              "value": "eq.true"
+            },
+            {
+              "name": "select",
+              "value": "id,name,url"
+            }
           ]
         },
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "apikey", "value": "={{$env.SUPABASE_SERVICE_ROLE_KEY}}" },
-            { "name": "Authorization", "value": "=Bearer {{$env.SUPABASE_SERVICE_ROLE_KEY}}" }
+            {
+              "name": "apikey",
+              "value": "={{$env.SUPABASE_SERVICE_ROLE_KEY}}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.SUPABASE_SERVICE_ROLE_KEY}}"
+            }
           ]
         },
         "options": {}
@@ -56,19 +74,25 @@
       "name": "Obtener webs activas",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [460, 460]
+      "position": [
+        460,
+        460
+      ]
     },
     {
       "parameters": {
         "mode": "runOnceForEachItem",
         "language": "javaScript",
-        "jsCode": "// Lee la caducidad real del certificado TLS y las Core Web Vitals de campo\n// (CrUX, vía PageSpeed Insights) de una web, y las guarda en metrics_daily\n// con upsert (site_id, day). Solo field data: si Google no tiene tráfico\n// real de esta web, se guarda null en vez de una estimación de laboratorio.\n//\n// El sandbox del task runner no expone globals como URL: hay que pedirlos\n// con require() igual que los módulos, y además añadirlos a\n// NODE_FUNCTION_ALLOW_BUILTIN en n8n-task-runners.json (\"crypto,tls,url\").\nconst tls = require('tls');\nconst { URL } = require('url');\n\nfunction getCertExpiry(hostname, port = 443, timeout = 8000) {\n  return new Promise((resolve) => {\n    let settled = false;\n    const finish = (value) => {\n      if (!settled) {\n        settled = true;\n        resolve(value);\n      }\n    };\n    const socket = tls.connect(port, hostname, { servername: hostname, timeout }, () => {\n      const cert = socket.getPeerCertificate();\n      socket.end();\n      finish(cert && cert.valid_to ? new Date(cert.valid_to).toISOString() : null);\n    });\n    socket.on('error', () => finish(null));\n    socket.on('timeout', () => { socket.destroy(); finish(null); });\n  });\n}\n\nconst site = $input.item.json;\nconst hostname = new URL(site.url).hostname;\n\nconst sslExpiresAt = await getCertExpiry(hostname);\n\nlet lcpMs = null;\nlet inpMs = null;\nlet cls = null;\n\ntry {\n  const psi = await this.helpers.httpRequest({\n    method: 'GET',\n    url: 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed',\n    qs: { url: site.url, strategy: 'mobile', key: $env.PAGESPEED_API_KEY },\n    json: true,\n    timeout: 30000,\n    ignoreHttpStatusErrors: true,\n    returnFullResponse: true,\n  });\n  const metrics = psi.body && psi.body.loadingExperience && psi.body.loadingExperience.metrics;\n  if (metrics) {\n    if (metrics.LARGEST_CONTENTFUL_PAINT_MS) lcpMs = metrics.LARGEST_CONTENTFUL_PAINT_MS.percentile;\n    if (metrics.INTERACTION_TO_NEXT_PAINT) inpMs = metrics.INTERACTION_TO_NEXT_PAINT.percentile;\n    if (metrics.CUMULATIVE_LAYOUT_SHIFT_SCORE) cls = metrics.CUMULATIVE_LAYOUT_SHIFT_SCORE.percentile / 100;\n  }\n} catch (err) {\n  // Sin datos de PSI en esta ejecución: se queda en null, nunca un valor inventado.\n}\n\nconst today = new Date().toISOString().slice(0, 10);\n\nawait this.helpers.httpRequest({\n  method: 'POST',\n  url: `${$env.SUPABASE_URL}/rest/v1/metrics_daily`,\n  qs: { on_conflict: 'site_id,day' },\n  headers: {\n    apikey: $env.SUPABASE_SERVICE_ROLE_KEY,\n    Authorization: `Bearer ${$env.SUPABASE_SERVICE_ROLE_KEY}`,\n    'Content-Type': 'application/json',\n    Prefer: 'resolution=merge-duplicates,return=minimal',\n  },\n  body: {\n    site_id: site.id,\n    day: today,\n    ssl_expires_at: sslExpiresAt,\n    lcp_ms: lcpMs,\n    inp_ms: inpMs,\n    cls,\n  },\n  json: true,\n});\n\nreturn {\n  json: {\n    site_id: site.id,\n    site_name: site.name,\n    site_url: site.url,\n    ssl_expires_at: sslExpiresAt,\n    lcp_ms: lcpMs,\n    inp_ms: inpMs,\n    cls,\n  },\n};\n"
+        "jsCode": "// Lee la caducidad real del certificado TLS y las Core Web Vitals de campo\n// (CrUX, vía PageSpeed Insights) de una web, y las guarda en metrics_daily\n// con upsert (site_id, day). Solo field data: si Google no tiene tráfico\n// real de esta web, se guarda null en vez de una estimación de laboratorio.\n//\n// El sandbox del task runner no expone globals como URL: hay que pedirlos\n// con require() igual que los módulos, y además añadirlos a\n// NODE_FUNCTION_ALLOW_BUILTIN en n8n-task-runners.json (\"crypto,tls,url\").\nconst tls = require('tls');\nconst { URL } = require('url');\n\nfunction getCertExpiry(hostname, port = 443, timeout = 8000) {\n  return new Promise((resolve) => {\n    let settled = false;\n    const finish = (value) => {\n      if (!settled) {\n        settled = true;\n        resolve(value);\n      }\n    };\n    const socket = tls.connect(port, hostname, { servername: hostname, timeout }, () => {\n      const cert = socket.getPeerCertificate();\n      socket.end();\n      finish(cert && cert.valid_to ? new Date(cert.valid_to).toISOString() : null);\n    });\n    socket.on('error', () => finish(null));\n    socket.on('timeout', () => { socket.destroy(); finish(null); });\n  });\n}\n\nconst site = $input.item.json;\nconst hostname = new URL(site.url).hostname;\n\nconst sslExpiresAt = await getCertExpiry(hostname);\n\nlet lcpMs = null;\nlet inpMs = null;\nlet cls = null;\nlet screenshotDataUri = null;\n\ntry {\n  const psi = await this.helpers.httpRequest({\n    method: 'GET',\n    url: 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed',\n    qs: { url: site.url, strategy: 'mobile', key: $env.PAGESPEED_API_KEY },\n    json: true,\n    timeout: 30000,\n    ignoreHttpStatusErrors: true,\n    returnFullResponse: true,\n  });\n  const metrics = psi.body && psi.body.loadingExperience && psi.body.loadingExperience.metrics;\n  if (metrics) {\n    if (metrics.LARGEST_CONTENTFUL_PAINT_MS) lcpMs = metrics.LARGEST_CONTENTFUL_PAINT_MS.percentile;\n    if (metrics.INTERACTION_TO_NEXT_PAINT) inpMs = metrics.INTERACTION_TO_NEXT_PAINT.percentile;\n    if (metrics.CUMULATIVE_LAYOUT_SHIFT_SCORE) cls = metrics.CUMULATIVE_LAYOUT_SHIFT_SCORE.percentile / 100;\n  }\n  // La captura sí sale de la ejecución de laboratorio de Lighthouse: es una\n  // imagen de la portada, no una métrica, así que no hay dato que falsear.\n  const screenshot = psi.body && psi.body.lighthouseResult && psi.body.lighthouseResult.audits\n    && psi.body.lighthouseResult.audits['final-screenshot'];\n  if (screenshot && screenshot.details && typeof screenshot.details.data === 'string') {\n    screenshotDataUri = screenshot.details.data;\n  }\n} catch (err) {\n  // Sin datos de PSI en esta ejecución: se queda en null, nunca un valor inventado.\n}\n\nconst today = new Date().toISOString().slice(0, 10);\n\n// Captura de la portada → Storage (bucket privado site-screenshots). Si falla,\n// se queda la anterior con su fecha: el panel muestra cuándo se tomó.\nlet screenshotSaved = false;\nconst screenshotMatch = screenshotDataUri && screenshotDataUri.match(/^data:(image\\/(?:jpeg|png|webp));base64,(.+)$/);\nif (screenshotMatch) {\n  try {\n    const BufferImpl = typeof Buffer !== 'undefined' ? Buffer : require('buffer').Buffer;\n    const path = `${site.id}/latest.jpg`;\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: `${$env.SUPABASE_URL}/storage/v1/object/site-screenshots/${path}`,\n      headers: {\n        apikey: $env.SUPABASE_SERVICE_ROLE_KEY,\n        Authorization: `Bearer ${$env.SUPABASE_SERVICE_ROLE_KEY}`,\n        'Content-Type': screenshotMatch[1],\n        'x-upsert': 'true',\n      },\n      body: BufferImpl.from(screenshotMatch[2], 'base64'),\n      json: false,\n      timeout: 20000,\n    });\n    await this.helpers.httpRequest({\n      method: 'PATCH',\n      url: `${$env.SUPABASE_URL}/rest/v1/sites`,\n      qs: { id: `eq.${site.id}` },\n      headers: {\n        apikey: $env.SUPABASE_SERVICE_ROLE_KEY,\n        Authorization: `Bearer ${$env.SUPABASE_SERVICE_ROLE_KEY}`,\n        'Content-Type': 'application/json',\n        Prefer: 'return=minimal',\n      },\n      body: { screenshot_path: path, screenshot_taken_at: new Date().toISOString() },\n      json: true,\n    });\n    screenshotSaved = true;\n  } catch (err) {\n    // Sin captura nueva hoy; no bloquea el guardado de SSL y CWV.\n  }\n}\n\nawait this.helpers.httpRequest({\n  method: 'POST',\n  url: `${$env.SUPABASE_URL}/rest/v1/metrics_daily`,\n  qs: { on_conflict: 'site_id,day' },\n  headers: {\n    apikey: $env.SUPABASE_SERVICE_ROLE_KEY,\n    Authorization: `Bearer ${$env.SUPABASE_SERVICE_ROLE_KEY}`,\n    'Content-Type': 'application/json',\n    Prefer: 'resolution=merge-duplicates,return=minimal',\n  },\n  body: {\n    site_id: site.id,\n    day: today,\n    ssl_expires_at: sslExpiresAt,\n    lcp_ms: lcpMs,\n    inp_ms: inpMs,\n    cls,\n  },\n  json: true,\n});\n\nreturn {\n  json: {\n    site_id: site.id,\n    site_name: site.name,\n    site_url: site.url,\n    ssl_expires_at: sslExpiresAt,\n    lcp_ms: lcpMs,\n    inp_ms: inpMs,\n    cls,\n    screenshot_saved: screenshotSaved,\n  },\n};\n"
       },
       "id": "8c2f6f3a-0a1a-4b7a-9a1a-sslcwv000001",
       "name": "Comprobar SSL y CWV",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [680, 460]
+      "position": [
+        680,
+        460
+      ]
     },
     {
       "parameters": {
@@ -80,7 +104,10 @@
       "name": "Gestionar incidencia SSL",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [900, 460]
+      "position": [
+        900,
+        460
+      ]
     },
     {
       "parameters": {
@@ -95,7 +122,10 @@
               "id": "2b2b2b2b-0000-0000-0000-000000000001",
               "leftValue": "={{$json.action}}",
               "rightValue": "none",
-              "operator": { "type": "string", "operation": "notEquals" }
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
             }
           ],
           "combinator": "and"
@@ -106,7 +136,10 @@
       "name": "¿Hay aviso?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [1120, 460]
+      "position": [
+        1120,
+        460
+      ]
     },
     {
       "parameters": {
@@ -121,25 +154,66 @@
       "name": "Enviar aviso Telegram",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1340, 380]
+      "position": [
+        1340,
+        380
+      ]
     }
   ],
   "connections": {
     "Cada día a las 3:00": {
-      "main": [[{ "node": "Obtener webs activas", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Obtener webs activas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Obtener webs activas": {
-      "main": [[{ "node": "Comprobar SSL y CWV", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Comprobar SSL y CWV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Comprobar SSL y CWV": {
-      "main": [[{ "node": "Gestionar incidencia SSL", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Gestionar incidencia SSL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Gestionar incidencia SSL": {
-      "main": [[{ "node": "¿Hay aviso?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "¿Hay aviso?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "¿Hay aviso?": {
       "main": [
-        [{ "node": "Enviar aviso Telegram", "type": "main", "index": 0 }],
+        [
+          {
+            "node": "Enviar aviso Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ],
         []
       ]
     }

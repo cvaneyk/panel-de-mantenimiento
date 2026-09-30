@@ -4,9 +4,16 @@
   --color-bg: #f5f5f4;
   --color-surface: #ffffff;
   --color-border: #e2e2df;
+  --color-border-strong: #b9b9b3;
   --color-text: #1c1c1a;
   --color-text-muted: #6b6b66;
   --color-accent: #2d5a4a;
+
+  /* Escala de estado de tres pasos (§7 del SPEC). Nunca se usa sola: cada
+     estado lleva también su forma o icono. */
+  --color-ok: #2f8a5f;
+  --color-degraded: #b7791f;
+  --color-down: #c0392b;
 }
 
 body {

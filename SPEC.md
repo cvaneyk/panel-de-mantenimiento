@@ -3,7 +3,7 @@
 > Documento vivo. Es la fuente de verdad del proyecto: si el código y este documento
 > discrepan, se corrige uno de los dos en el mismo commit.
 >
-> Estado: v1 en definición · Última revisión: 2026-08-15
+> Estado: v1 en construcción · Última revisión: 2026-09-30
 
 ---
 
@@ -84,6 +84,7 @@ en dos capas independientes, y la capa externa tiene que dar valor por sí sola.
 | Tiempo de respuesta | Misma petición | 5 min |
 | Caducidad del certificado SSL | Handshake TLS | 1 vez al día |
 | Core Web Vitals (LCP, INP, CLS) móvil | PageSpeed Insights API | 1 vez al día |
+| Captura de la portada | Misma llamada a PageSpeed (`final-screenshot`) | 1 vez al día |
 | Cabeceras de seguridad presentes | Misma petición HTTP | 1 vez al día |
 
 ### Capa B — Interna WordPress (opcional, aporta el detalle)
@@ -96,10 +97,17 @@ Header: X-Panel-Key: <clave única por sitio>
 ```
 
 Devuelve versión de WP, PHP, listado de plugins/temas con sus actualizaciones
-pendientes, número de administradores, si `WP_DEBUG` está activo, tamaño de la base de
-datos y fecha del último backup detectado (busca rastro de UpdraftPlus / Duplicator /
-All-in-One en `wp-content`; si no encuentra nada, devuelve `null` y el panel lo muestra
-como "sin monitorizar", nunca como "sin backup").
+pendientes, número de administradores, si `WP_DEBUG` está activo, si la web pide a los
+buscadores que no la indexen (opción `blog_public`), tamaño y estado de la base de datos
+(revisiones, transients caducados, tamaño de las opciones con autoload) y fecha del
+último backup detectado (busca rastro de UpdraftPlus / Duplicator / All-in-One en
+`wp-content`; si no encuentra nada, devuelve `null` y el panel lo muestra como "sin
+monitorizar", nunca como "sin backup").
+
+Las actualizaciones pendientes se leen de la comprobación que el propio WordPress ya
+guarda (transients `update_plugins` / `update_themes` / `update_core`). El agente no
+fuerza una comprobación nueva, porque eso escribiría en la web. Devuelve también la
+fecha de esa comprobación, para que el panel no la presente como más reciente de lo que es.
 
 Se elige un mu-plugin propio en lugar de Application Passwords + REST del core porque:
 una sola llamada en vez de cuatro, no expone la API de escritura, no depende de que el
@@ -107,6 +115,14 @@ hosting no bloquee `/wp-json/wp/v2/users`, y es un activo propio reutilizable.
 
 **Requisito de seguridad del agente:** solo lectura, sin ninguna ruta que modifique
 nada, clave distinta por sitio, y comparación de claves con `hash_equals()`.
+
+**Dónde vive la clave.** En la web, como constante `PANEL_AGENT_KEY` en `wp-config.php`.
+En el panel, cifrada con **Supabase Vault** (`sites.agent_key_secret_id` apunta al
+secreto). No basta con guardar un hash, porque n8n necesita enviarla en claro al llamar
+al agente. La agencia la genera desde la ficha de la web y se muestra una sola vez;
+regenerarla invalida la anterior. Solo `service_role` (n8n) puede leerla descifrada.
+
+El recolector del agente se ejecuta cada 6 horas.
 
 Las webs que no sean WordPress se quedan solo con la capa A. Es una degradación
 aceptable: siguen teniendo uptime, SSL, CWV, incidencias y registro de trabajo.
@@ -157,8 +173,9 @@ memberships(user_id → profiles, client_id → clients, primary key (user_id, c
 -- Objeto monitorizado
 sites(
   id, client_id → clients, name, url, platform,      -- 'wordpress'|'prestashop'|'other'
-  agent_key_hash,                                     -- null si no tiene agente
-  agent_last_seen_at, monitoring_enabled, created_at
+  agent_key_secret_id,                                -- id en Supabase Vault; null si no tiene agente
+  agent_last_seen_at, monitoring_enabled, created_at,
+  screenshot_path, screenshot_taken_at                -- captura en Storage (bucket privado site-screenshots)
 )
 
 -- Capa A: serie temporal cruda
@@ -179,9 +196,14 @@ metrics_daily(
 -- Capa B: última foto conocida, se sobreescribe
 site_inventory(
   site_id PK, collected_at, wp_version, php_version,
-  plugins jsonb, themes jsonb,                        -- [{slug, name, version, update_available}]
-  updates_pending int, admin_count int, debug_enabled bool,
-  db_size_mb int, last_backup_at timestamptz          -- null = sin monitorizar
+  core_update_available text,                         -- versión nueva de WP; null si está al día
+  plugins jsonb, themes jsonb,                        -- [{slug, name, version, active, update_available}]
+  updates_pending int, updates_checked_at timestamptz,
+  admin_count int, debug_enabled bool,
+  search_engines_discouraged bool,                    -- true = "Disuadir a los motores de búsqueda"
+  db_size_mb int, db_revisions int, db_expired_transients int, db_autoload_kb int,
+  last_backup_at timestamptz,                         -- null = sin monitorizar
+  backup_source text                                  -- 'updraftplus'|'duplicator'|'all-in-one-wp-migration'
 )
 
 -- Incidencias
@@ -245,10 +267,25 @@ ahora que discutirlas con un cliente después:
 - Al abrir una web: gráficas, inventario, incidencias y worklog de esa web.
 - Formulario rápido de registro de trabajo (menos de 15 segundos por entrada, o no se
   usará y el producto se muere).
+- La tabla de webs lleva una miniatura de la portada y las barras de uptime de los
+  últimos 30 días: más visual sin perder densidad.
+
+### Barras de uptime
+
+Una barra por día de los últimos 30 días (lo que guarda `checks`), en hora de Madrid:
+
+- **Correcto**: todas las comprobaciones del día fueron bien. Barra llena.
+- **Con fallos**: hubo comprobaciones fallidas, pero no llegaron a caída (ruido o
+  cortes de menos de 15 min). Barra rayada.
+- **Caída**: hubo una incidencia `down` abierta durante ese día. Barra partida.
+- **Sin datos**: no hubo comprobaciones. Barra hueca, nunca verde.
+
+Cada estado se distingue por la forma, además de por el color.
 
 ### Vista de cliente
-- Una sola pantalla por web: estado actual, uptime del mes, CWV, "última actualización
-  realizada" y las últimas entradas del worklog en lenguaje llano.
+- Una sola pantalla por web: captura de la portada, estado actual, barras de uptime,
+  CWV, "última actualización realizada" y las últimas entradas del worklog en lenguaje
+  llano. El inventario técnico (plugins, base de datos) se queda en la vista de agencia.
 - Prioriza tranquilidad sobre densidad. El cliente no quiere datos, quiere confirmar que
   alguien se está ocupando.
 
@@ -305,6 +342,13 @@ librería de gráficas, pulir el diseño, montar el agente) va después.
 - **Actualizaciones remotas** (fuera de v1): aplicar actualizaciones desde el panel
   significa que si una actualización rompe una web del cliente, la rompió el panel. No
   se aborda hasta tener backups verificados y rollback.
+- **Acciones remotas pedidas para una v2** (decisión del 2026-09-30: fuera de la v1):
+  instalar, actualizar y desinstalar plugins y temas, lanzar backups y optimizar la base
+  de datos desde el panel. Todas escriben en la web del cliente, así que antes hace falta:
+  (1) backups que el propio sistema ejecute y sepa **restaurar**, (2) un canal de
+  órdenes separado de la clave de lectura, con peticiones firmadas y caducidad, (3) un
+  registro de cada acción con su autor y (4) reescribir la regla 6 del CLAUDE.md. Se
+  diseña como fase propia, no como un añadido al agente de lectura.
 - **Coste de PageSpeed Insights**: la API es gratuita con clave, pero tiene cuota. Con
   una llamada diaria por web sobra de largo; si algún día se hace horario, hay que
   revisarlo.

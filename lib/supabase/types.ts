@@ -29,10 +29,12 @@ export type Site = {
   name: string;
   url: string;
   platform: "wordpress" | "prestashop" | "other";
-  agent_key_hash: string | null;
+  agent_key_secret_id: string | null;
   agent_last_seen_at: string | null;
   monitoring_enabled: boolean;
   created_at: string;
+  screenshot_path: string | null;
+  screenshot_taken_at: string | null;
 };
 
 export type Check = {
@@ -85,4 +87,44 @@ export type MetricsDaily = {
   inp_ms: number | null;
   cls: number | null;
   ssl_expires_at: string | null;
+};
+
+export type InventoryPlugin = {
+  slug: string;
+  name: string;
+  version: string;
+  active: boolean;
+  update_available: string | null;
+};
+
+export type InventoryTheme = InventoryPlugin;
+
+export type BackupSource = "updraftplus" | "duplicator" | "all-in-one-wp-migration";
+
+export type SiteInventory = {
+  site_id: string;
+  collected_at: string;
+  wp_version: string | null;
+  php_version: string | null;
+  core_update_available: string | null;
+  plugins: InventoryPlugin[];
+  themes: InventoryTheme[];
+  updates_pending: number | null;
+  updates_checked_at: string | null;
+  admin_count: number | null;
+  debug_enabled: boolean | null;
+  search_engines_discouraged: boolean | null;
+  db_size_mb: number | null;
+  db_revisions: number | null;
+  db_expired_transients: number | null;
+  db_autoload_kb: number | null;
+  last_backup_at: string | null;
+  backup_source: BackupSource | null;
+};
+
+export type UptimeDailyRow = {
+  site_id: string;
+  day: string;
+  checks_total: number;
+  checks_failed: number;
 };

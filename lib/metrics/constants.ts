@@ -13,3 +13,6 @@ export const SSL_EXPIRING_WARNING_DAYS = 14;
 // Pasado este tiempo sin respuesta del agente, el inventario se muestra como
 // caducado en vez de fingir que está al día.
 export const AGENT_STALE_AFTER_HOURS = 48;
+
+// Días de barras de uptime: los mismos que retiene la tabla checks (§5).
+export const UPTIME_HISTORY_DAYS = 30;

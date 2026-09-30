@@ -3,12 +3,23 @@ import { formatDateTimeMadrid } from "@/lib/format";
 import { WORKLOG_CATEGORY_LABELS } from "@/lib/worklog-labels";
 import { createClient } from "@/lib/supabase/server";
 import { SiteStatusBadge } from "@/components/site-status-badge";
+import { SiteScreenshot } from "@/components/site-screenshot";
+import { UptimeBars, UptimeLegend, formatUptimePercent } from "@/components/uptime-bars";
+import { getScreenshotUrls, getUptimeBars } from "@/lib/site-visuals";
+import { uptimePercent, type UptimeBar } from "@/lib/metrics/uptime";
 import type { Check, WorklogEntry } from "@/lib/supabase/types";
 
 type ClientWithSites = {
   id: string;
   name: string;
-  sites: { id: string; name: string; url: string; platform: string }[];
+  sites: {
+    id: string;
+    name: string;
+    url: string;
+    platform: string;
+    screenshot_path: string | null;
+    screenshot_taken_at: string | null;
+  }[];
 };
 
 // Cuántas comprobaciones/entradas recientes se traen por sitio. No hay "top N
@@ -38,7 +49,7 @@ export default async function ClientePage() {
 
   const { data: clients } = await supabase
     .from("clients")
-    .select("id, name, sites(id, name, url, platform)")
+    .select("id, name, sites(id, name, url, platform, screenshot_path, screenshot_taken_at)")
     .returns<ClientWithSites[]>();
 
   if (!clients?.length) {
@@ -54,9 +65,11 @@ export default async function ClientePage() {
 
   let checksBySite = new Map<string, Check[]>();
   let worklogBySite = new Map<string, WorklogEntry[]>();
+  let uptimeBySite = new Map<string, UptimeBar[]>();
+  let screenshotUrls = new Map<string, string>();
 
   if (siteIds.length > 0) {
-    const [{ data: checks }, { data: worklog }] = await Promise.all([
+    const [{ data: checks }, { data: worklog }, uptime, screenshots] = await Promise.all([
       supabase
         .from("checks")
         .select("id, site_id, checked_at, ok, status_code, response_ms, error")
@@ -72,8 +85,12 @@ export default async function ClientePage() {
         .order("performed_at", { ascending: false })
         .limit(RECENT_WORKLOG_PER_SITE * siteIds.length)
         .returns<WorklogEntry[]>(),
+      getUptimeBars(supabase, siteIds),
+      getScreenshotUrls(supabase, clients.flatMap((client) => client.sites)),
     ]);
 
+    uptimeBySite = uptime;
+    screenshotUrls = screenshots;
     checksBySite = groupBySite(checks, RECENT_CHECKS_PER_SITE);
     worklogBySite = groupBySite(worklog, RECENT_WORKLOG_PER_SITE);
   }
@@ -94,47 +111,71 @@ export default async function ClientePage() {
               {client.sites.map((site) => {
                 const summary = computeSiteStatus(checksBySite.get(site.id) ?? []);
                 const recentWork = worklogBySite.get(site.id) ?? [];
+                const bars = uptimeBySite.get(site.id) ?? [];
                 return (
                   <li
                     key={site.id}
-                    className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4"
+                    className="grid gap-5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 sm:grid-cols-[140px_1fr]"
                   >
-                    <div className="flex items-center justify-between">
-                      <p className="font-medium">{site.name}</p>
-                      <SiteStatusBadge status={summary.status} />
-                    </div>
-                    <a
-                      href={site.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-sm text-[var(--color-text-muted)] hover:underline"
-                    >
-                      {site.url}
-                    </a>
-                    <p className="mt-2 text-sm text-[var(--color-text-muted)]">
-                      {summary.status === "unknown"
-                        ? "Sin datos de monitorización todavía: la comprobación de disponibilidad está en marcha."
-                        : `Última comprobación: ${formatDateTimeMadrid(summary.lastCheckedAt!)}.`}
-                    </p>
-
-                    {recentWork.length > 0 ? (
-                      <div className="mt-3 border-t border-[var(--color-border)] pt-3">
-                        <p className="text-xs font-medium text-[var(--color-text-muted)]">
-                          Últimas actualizaciones
-                        </p>
-                        <ul className="mt-2 space-y-1.5">
-                          {recentWork.map((entry) => (
-                            <li key={entry.id} className="text-sm">
-                              <span className="text-[var(--color-text-muted)]">
-                                {formatDateTimeMadrid(entry.performed_at)} ·{" "}
-                                {WORKLOG_CATEGORY_LABELS[entry.category]} —{" "}
-                              </span>
-                              {entry.summary}
-                            </li>
-                          ))}
-                        </ul>
+                    <SiteScreenshot
+                      url={screenshotUrls.get(site.id)}
+                      takenAt={site.screenshot_taken_at}
+                      siteName={site.name}
+                      size="large"
+                    />
+                    <div className="min-w-0">
+                      <div className="flex items-center justify-between">
+                        <p className="font-medium">{site.name}</p>
+                        <SiteStatusBadge status={summary.status} />
                       </div>
-                    ) : null}
+                      <a
+                        href={site.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sm text-[var(--color-text-muted)] hover:underline"
+                      >
+                        {site.url}
+                      </a>
+                      <p className="mt-2 text-sm text-[var(--color-text-muted)]">
+                        {summary.status === "unknown"
+                          ? "Sin datos de monitorización todavía: la comprobación de disponibilidad está en marcha."
+                          : `Última comprobación: ${formatDateTimeMadrid(summary.lastCheckedAt!)}.`}
+                      </p>
+
+                      <div className="mt-4">
+                        <div className="flex items-baseline justify-between text-sm">
+                          <span className="text-[var(--color-text-muted)]">Disponibilidad · 30 días</span>
+                          <span className="font-mono tabular-nums">
+                            {formatUptimePercent(uptimePercent(bars))}
+                          </span>
+                        </div>
+                        <div className="mt-2">
+                          <UptimeBars bars={bars} />
+                        </div>
+                        <div className="mt-2">
+                          <UptimeLegend />
+                        </div>
+                      </div>
+
+                      {recentWork.length > 0 ? (
+                        <div className="mt-3 border-t border-[var(--color-border)] pt-3">
+                          <p className="text-xs font-medium text-[var(--color-text-muted)]">
+                            Últimas actualizaciones
+                          </p>
+                          <ul className="mt-2 space-y-1.5">
+                            {recentWork.map((entry) => (
+                              <li key={entry.id} className="text-sm">
+                                <span className="text-[var(--color-text-muted)]">
+                                  {formatDateTimeMadrid(entry.performed_at)} ·{" "}
+                                  {WORKLOG_CATEGORY_LABELS[entry.category]} —{" "}
+                                </span>
+                                {entry.summary}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </div>
                   </li>
                 );
               })}

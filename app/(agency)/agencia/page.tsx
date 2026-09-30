@@ -3,6 +3,10 @@ import { computeSiteStatus } from "@/lib/metrics/status";
 import { formatDateTimeMadrid, formatDurationSince } from "@/lib/format";
 import { createClient } from "@/lib/supabase/server";
 import { SiteStatusBadge } from "@/components/site-status-badge";
+import { SiteScreenshot } from "@/components/site-screenshot";
+import { UptimeBars, formatUptimePercent } from "@/components/uptime-bars";
+import { getScreenshotUrls, getUptimeBars } from "@/lib/site-visuals";
+import { uptimePercent } from "@/lib/metrics/uptime";
 import type { Check } from "@/lib/supabase/types";
 import { inviteMember } from "./actions";
 
@@ -18,6 +22,8 @@ type SiteRow = {
   id: string;
   name: string;
   url: string;
+  screenshot_path: string | null;
+  screenshot_taken_at: string | null;
   client: { name: string } | null;
   checks: Check[];
 };
@@ -55,7 +61,7 @@ export default async function AgenciaPage({
   const [{ data: sites }, { data: clients }, { data: openIncidents }] = await Promise.all([
     supabase
       .from("sites")
-      .select("id, name, url, client:clients(name), checks(id, site_id, checked_at, ok, status_code, response_ms, error)")
+      .select("id, name, url, screenshot_path, screenshot_taken_at, client:clients(name), checks(id, site_id, checked_at, ok, status_code, response_ms, error)")
       .order("checked_at", { referencedTable: "checks", ascending: false })
       .limit(3, { referencedTable: "checks" })
       .order("name")
@@ -71,6 +77,11 @@ export default async function AgenciaPage({
       .is("resolved_at", null)
       .order("opened_at", { ascending: false })
       .returns<OpenIncidentRow[]>(),
+  ]);
+
+  const [uptimeBySite, screenshotUrls] = await Promise.all([
+    getUptimeBars(supabase, (sites ?? []).map((site) => site.id)),
+    getScreenshotUrls(supabase, sites ?? []),
   ]);
 
   return (
@@ -113,13 +124,17 @@ export default async function AgenciaPage({
           Todas las webs de todos los clientes, con su estado más reciente.
         </p>
 
-        <div className="mt-6 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
+        <div className="mt-6 overflow-x-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-text-muted)]">
+                <th className="py-2 pr-2 pl-4 font-medium">
+                  <span className="sr-only">Captura</span>
+                </th>
                 <th className="px-4 py-2 font-medium">Web</th>
                 <th className="px-4 py-2 font-medium">Cliente</th>
                 <th className="px-4 py-2 font-medium">Estado</th>
+                <th className="px-4 py-2 font-medium">30 días</th>
                 <th className="px-4 py-2 font-medium tabular-nums">Respuesta</th>
                 <th className="px-4 py-2 font-medium">Última comprobación</th>
               </tr>
@@ -128,11 +143,22 @@ export default async function AgenciaPage({
               {sites?.length ? (
                 sites.map((site) => {
                   const summary = computeSiteStatus(site.checks);
+                  const bars = uptimeBySite.get(site.id) ?? [];
                   return (
                     <tr
                       key={site.id}
                       className="border-b border-[var(--color-border)] last:border-0"
                     >
+                      <td className="py-2 pr-2 pl-4">
+                        <Link href={`/agencia/webs/${site.id}`} tabIndex={-1} aria-hidden="true">
+                          <SiteScreenshot
+                            url={screenshotUrls.get(site.id)}
+                            takenAt={site.screenshot_taken_at}
+                            siteName={site.name}
+                            size="thumb"
+                          />
+                        </Link>
+                      </td>
                       <td className="px-4 py-2">
                         <Link
                           href={`/agencia/webs/${site.id}`}
@@ -156,6 +182,14 @@ export default async function AgenciaPage({
                       <td className="px-4 py-2">
                         <SiteStatusBadge status={summary.status} />
                       </td>
+                      <td className="px-4 py-2">
+                        <div className="flex items-center gap-2">
+                          <UptimeBars bars={bars} size="sm" />
+                          <span className="font-mono text-xs tabular-nums text-[var(--color-text-muted)]">
+                            {formatUptimePercent(uptimePercent(bars))}
+                          </span>
+                        </div>
+                      </td>
                       <td className="px-4 py-2 tabular-nums">
                         {summary.lastResponseMs !== null
                           ? `${summary.lastResponseMs} ms`
@@ -172,7 +206,7 @@ export default async function AgenciaPage({
               ) : (
                 <tr>
                   <td
-                    colSpan={5}
+                    colSpan={7}
                     className="px-4 py-6 text-center text-[var(--color-text-muted)]"
                   >
                     No hay webs dadas de alta todavía.

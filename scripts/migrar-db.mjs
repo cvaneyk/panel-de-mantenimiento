@@ -24,7 +24,12 @@ async function main() {
   }
 
   // Leer el archivo de migración
-  const migrationPath = path.join(process.cwd(), 'supabase', 'migrations', '20260815183447_initial_schema.sql');
+  // Por defecto, la migración inicial. Las siguientes se pasan como argumento:
+  //   node scripts/migrar-db.mjs supabase/migrations/20260930100000_agent_inventory_and_screenshots.sql
+  const isInitialMigration = !process.argv[2];
+  const migrationPath = isInitialMigration
+    ? path.join(process.cwd(), 'supabase', 'migrations', '20260815183447_initial_schema.sql')
+    : path.resolve(process.argv[2]);
   let sql;
   try {
     sql = fs.readFileSync(migrationPath, 'utf8');
@@ -45,10 +50,12 @@ async function main() {
     
     console.log("Ejecutando script SQL...");
     await client.query(sql);
-    console.log("✅ Tablas creadas y migración completada correctamente.");
-    
+    console.log(`✅ Migración aplicada: ${path.basename(migrationPath)}`);
+
     // Opcional: También inyectamos los datos semilla (seed.sql) para tener clientes falsos o lo dejamos vacío
-    const seedAns = await question('\n¿Quieres cargar los datos de prueba (seed.sql)? (s/n): ');
+    const seedAns = isInitialMigration
+      ? await question('\n¿Quieres cargar los datos de prueba (seed.sql)? (s/n): ')
+      : 'n';
     if (seedAns.toLowerCase() === 's') {
       const seedPath = path.join(process.cwd(), 'supabase', 'seed.sql');
       try {

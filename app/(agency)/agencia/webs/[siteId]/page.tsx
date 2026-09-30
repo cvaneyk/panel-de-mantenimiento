@@ -6,14 +6,23 @@ import { WORKLOG_CATEGORY_LABELS } from "@/lib/worklog-labels";
 import { SSL_EXPIRING_WARNING_DAYS } from "@/lib/metrics/constants";
 import { createClient } from "@/lib/supabase/server";
 import { SiteStatusBadge } from "@/components/site-status-badge";
-import type { Check, MetricsDaily, WorklogEntry } from "@/lib/supabase/types";
+import { SiteScreenshot } from "@/components/site-screenshot";
+import { UptimeBars, UptimeLegend, formatUptimePercent } from "@/components/uptime-bars";
+import { WordPressInventory } from "@/components/wordpress-inventory";
+import { getScreenshotUrls, getUptimeBars } from "@/lib/site-visuals";
+import { uptimePercent } from "@/lib/metrics/uptime";
+import type { Check, MetricsDaily, SiteInventory, WorklogEntry } from "@/lib/supabase/types";
 import { logWork } from "./actions";
+import { AgentKeyForm } from "./agent-key-form";
 
 type SiteDetail = {
   id: string;
   name: string;
   url: string;
   platform: string;
+  agent_key_secret_id: string | null;
+  screenshot_path: string | null;
+  screenshot_taken_at: string | null;
   client: { name: string } | null;
   checks: Check[];
 };
@@ -34,11 +43,17 @@ export default async function SiteDetailPage({
   const { error, ok } = await searchParams;
   const supabase = await createClient();
 
-  const [{ data: site }, { data: worklog }, { data: metricsDaily }] = await Promise.all([
+  const [
+    { data: site },
+    { data: worklog },
+    { data: metricsDaily },
+    { data: inventory },
+    uptimeBySite,
+  ] = await Promise.all([
     supabase
       .from("sites")
       .select(
-        "id, name, url, platform, client:clients(name), checks(id, site_id, checked_at, ok, status_code, response_ms, error)",
+        "id, name, url, platform, agent_key_secret_id, screenshot_path, screenshot_taken_at, client:clients(name), checks(id, site_id, checked_at, ok, status_code, response_ms, error)",
       )
       .eq("id", siteId)
       .order("checked_at", { referencedTable: "checks", ascending: false })
@@ -57,10 +72,18 @@ export default async function SiteDetailPage({
       .order("day", { ascending: false })
       .limit(1)
       .maybeSingle<MetricsDaily>(),
+    supabase
+      .from("site_inventory")
+      .select("*")
+      .eq("site_id", siteId)
+      .maybeSingle<SiteInventory>(),
+    getUptimeBars(supabase, [siteId]),
   ]);
 
   if (!site) notFound();
 
+  const screenshotUrls = await getScreenshotUrls(supabase, [site]);
+  const uptimeBars = uptimeBySite.get(site.id) ?? [];
   const summary = computeSiteStatus(site.checks);
   const sslDaysLeft = metricsDaily?.ssl_expires_at
     ? Math.floor((new Date(metricsDaily.ssl_expires_at).getTime() - Date.now()) / 86400000)
@@ -86,6 +109,40 @@ export default async function SiteDetailPage({
           <SiteStatusBadge status={summary.status} />
         </div>
       </div>
+
+      <section className="grid gap-6 sm:grid-cols-[220px_1fr]">
+        <SiteScreenshot
+          url={screenshotUrls.get(site.id)}
+          takenAt={site.screenshot_taken_at}
+          siteName={site.name}
+          size="large"
+        />
+        <div>
+          <div className="flex items-baseline justify-between gap-4">
+            <h2 className="text-base font-semibold">Disponibilidad · 30 días</h2>
+            <p className="font-mono text-2xl tabular-nums">
+              {formatUptimePercent(uptimePercent(uptimeBars))}
+            </p>
+          </div>
+          <div className="mt-3">
+            <UptimeBars bars={uptimeBars} />
+          </div>
+          <div className="mt-1 flex justify-between text-xs text-[var(--color-text-muted)] tabular-nums">
+            <span>Hace 30 días</span>
+            <span>Hoy</span>
+          </div>
+          <div className="mt-3">
+            <UptimeLegend />
+          </div>
+          <p className="mt-3 text-sm text-[var(--color-text-muted)]">
+            {summary.lastCheckedAt
+              ? `Última comprobación: ${formatDateTimeMadrid(summary.lastCheckedAt)}${
+                  summary.lastResponseMs !== null ? ` · ${summary.lastResponseMs} ms` : ""
+                }.`
+              : "Sin comprobaciones todavía: el recolector de uptime aún no ha pasado por esta web."}
+          </p>
+        </div>
+      </section>
 
       <section>
         <h2 className="text-base font-semibold">Rendimiento y SSL</h2>
@@ -142,6 +199,29 @@ export default async function SiteDetailPage({
           </p>
         ) : null}
       </section>
+
+      {site.platform === "wordpress" ? (
+        <section>
+          <h2 className="text-base font-semibold">WordPress</h2>
+          <div className="mt-3">
+            {inventory ? (
+              <WordPressInventory inventory={inventory} />
+            ) : (
+              <p className="text-sm text-[var(--color-text-muted)]">
+                {site.agent_key_secret_id
+                  ? "Clave generada, pero el agente aún no ha respondido. Comprueba que el mu-plugin está en wp-content/mu-plugins/ y la clave en wp-config.php; el recolector pasa cada 6 horas."
+                  : "Sin inventario: esta web no tiene el agente instalado. Con él verás versiones, plugins, temas, backups y base de datos."}
+              </p>
+            )}
+          </div>
+          <div className="mt-6 max-w-xl">
+            <h3 className="text-sm font-semibold">Clave del agente</h3>
+            <div className="mt-2">
+              <AgentKeyForm siteId={site.id} hasKey={site.agent_key_secret_id !== null} />
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="max-w-lg">
         <h2 className="text-base font-semibold">Registrar trabajo</h2>

@@ -1,0 +1,70 @@
+{
+  "name": "Recolector B — Agente WordPress",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Recolector B — agente WordPress (fase 6 del SPEC)\n\nCada 6 horas pide a Supabase la lista de webs WordPress con clave de agente (función `agent_targets()`, solo accesible con service_role), llama a `/wp-json/panel/v1/status` de cada una y guarda la foto en `site_inventory`.\n\nUsa las mismas variables de entorno que los otros recolectores: `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`.\n\n**Las claves de los agentes nunca salen del nodo Code.** Se leen descifradas de Vault dentro del propio nodo y solo se devuelve un resumen sin claves, porque n8n guarda en el historial de ejecuciones los items que pasan entre nodos. No dividas este nodo en \"obtener webs\" + \"llamar agente\" con un HTTP Request intermedio: las claves quedarían guardadas en claro en cada ejecución.\n\nSi un agente no responde, no se toca su inventario: a las 48 h el panel lo marca como caducado.",
+        "height": 360,
+        "width": 480
+      },
+      "id": "7c2a8e4b-1b2b-4c3d-8e4f-note000000001",
+      "name": "Notas",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "7c2a8e4b-1b2b-4c3d-8e4f-trigger000001",
+      "name": "Cada 6 horas",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Todas las webs en una sola ejecución (modo \"Run Once for All Items\") a\n// propósito: las claves de los agentes salen descifradas de Vault y no deben\n// viajar como items entre nodos, porque n8n guarda los items de cada nodo en\n// el historial de ejecuciones. Aquí solo sale un resumen sin claves.\n//\n// Si un agente no responde, no se toca su inventario ni agent_last_seen_at:\n// el panel lo mostrará como caducado a las 48 h (§6 del SPEC), nunca como\n// \"al día\" con datos viejos.\nconst supabaseHeaders = {\n  apikey: $env.SUPABASE_SERVICE_ROLE_KEY,\n  Authorization: `Bearer ${$env.SUPABASE_SERVICE_ROLE_KEY}`,\n  'Content-Type': 'application/json',\n};\n\nconst targets = await this.helpers.httpRequest({\n  method: 'POST',\n  url: `${$env.SUPABASE_URL}/rest/v1/rpc/agent_targets`,\n  headers: supabaseHeaders,\n  body: {},\n  json: true,\n});\n\nconst results = [];\n\nfor (const target of targets) {\n  const endpoint = `${target.url.replace(/\\/+$/, '')}/wp-json/panel/v1/status`;\n\n  let response;\n  try {\n    response = await this.helpers.httpRequest({\n      method: 'GET',\n      url: endpoint,\n      headers: { 'X-Panel-Key': target.agent_key, Accept: 'application/json' },\n      json: true,\n      timeout: 20000,\n      ignoreHttpStatusErrors: true,\n      returnFullResponse: true,\n    });\n  } catch (err) {\n    results.push({ site_id: target.site_id, ok: false, error: err.message });\n    continue;\n  }\n\n  const body = response.body;\n  if (response.statusCode !== 200 || !body || typeof body !== 'object' || !body.wp_version) {\n    results.push({ site_id: target.site_id, ok: false, error: `HTTP ${response.statusCode}` });\n    continue;\n  }\n\n  const collectedAt = new Date().toISOString();\n\n  // Lista explícita de columnas: lo que no venga del agente se guarda null,\n  // nunca un valor por defecto que parezca un dato.\n  const pick = (key) => (body[key] === undefined ? null : body[key]);\n\n  await this.helpers.httpRequest({\n    method: 'POST',\n    url: `${$env.SUPABASE_URL}/rest/v1/site_inventory`,\n    qs: { on_conflict: 'site_id' },\n    headers: { ...supabaseHeaders, Prefer: 'resolution=merge-duplicates,return=minimal' },\n    body: {\n      site_id: target.site_id,\n      collected_at: collectedAt,\n      wp_version: pick('wp_version'),\n      php_version: pick('php_version'),\n      core_update_available: pick('core_update_available'),\n      plugins: Array.isArray(body.plugins) ? body.plugins : [],\n      themes: Array.isArray(body.themes) ? body.themes : [],\n      updates_pending: pick('updates_pending'),\n      updates_checked_at: pick('updates_checked_at'),\n      admin_count: pick('admin_count'),\n      debug_enabled: pick('debug_enabled'),\n      search_engines_discouraged: pick('search_engines_discouraged'),\n      db_size_mb: pick('db_size_mb'),\n      db_revisions: pick('db_revisions'),\n      db_expired_transients: pick('db_expired_transients'),\n      db_autoload_kb: pick('db_autoload_kb'),\n      last_backup_at: pick('last_backup_at'),\n      backup_source: pick('backup_source'),\n    },\n    json: true,\n  });\n\n  await this.helpers.httpRequest({\n    method: 'PATCH',\n    url: `${$env.SUPABASE_URL}/rest/v1/sites`,\n    qs: { id: `eq.${target.site_id}` },\n    headers: { ...supabaseHeaders, Prefer: 'return=minimal' },\n    body: { agent_last_seen_at: collectedAt },\n    json: true,\n  });\n\n  results.push({\n    site_id: target.site_id,\n    ok: true,\n    wp_version: body.wp_version,\n    updates_pending: pick('updates_pending'),\n  });\n}\n\nreturn results.map((json) => ({ json }));\n"
+      },
+      "id": "7c2a8e4b-1b2b-4c3d-8e4f-agents0000001",
+      "name": "Leer agentes y guardar inventario",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        460
+      ]
+    }
+  ],
+  "connections": {
+    "Cada 6 horas": {
+      "main": [
+        [
+          {
+            "node": "Leer agentes y guardar inventario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
