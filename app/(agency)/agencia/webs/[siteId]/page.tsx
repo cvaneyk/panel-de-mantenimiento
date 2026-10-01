@@ -67,7 +67,7 @@ export default async function SiteDetailPage({
       .returns<WorklogEntry[]>(),
     supabase
       .from("metrics_daily")
-      .select("site_id, day, uptime_pct, checks_total, checks_failed, response_ms_avg, response_ms_p95, lcp_ms, inp_ms, cls, ssl_expires_at")
+      .select("site_id, day, uptime_pct, checks_total, checks_failed, response_ms_avg, response_ms_p95, lcp_ms, inp_ms, cls, lab_performance_score, lab_lcp_ms, lab_cls, lab_tbt_ms, ssl_expires_at")
       .eq("site_id", siteId)
       .order("day", { ascending: false })
       .limit(1)
@@ -168,7 +168,7 @@ export default async function SiteDetailPage({
             </dd>
           </div>
           <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
-            <dt className="text-xs text-[var(--color-text-muted)]">LCP (móvil)</dt>
+            <dt className="text-xs text-[var(--color-text-muted)]">LCP real (móvil)</dt>
             <dd className="mt-1 text-sm tabular-nums">
               {metricsDaily?.lcp_ms !== null && metricsDaily?.lcp_ms !== undefined
                 ? `${metricsDaily.lcp_ms} ms`
@@ -176,7 +176,7 @@ export default async function SiteDetailPage({
             </dd>
           </div>
           <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
-            <dt className="text-xs text-[var(--color-text-muted)]">INP (móvil)</dt>
+            <dt className="text-xs text-[var(--color-text-muted)]">INP real (móvil)</dt>
             <dd className="mt-1 text-sm tabular-nums">
               {metricsDaily?.inp_ms !== null && metricsDaily?.inp_ms !== undefined
                 ? `${metricsDaily.inp_ms} ms`
@@ -184,7 +184,7 @@ export default async function SiteDetailPage({
             </dd>
           </div>
           <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
-            <dt className="text-xs text-[var(--color-text-muted)]">CLS (móvil)</dt>
+            <dt className="text-xs text-[var(--color-text-muted)]">CLS real (móvil)</dt>
             <dd className="mt-1 text-sm tabular-nums">
               {metricsDaily?.cls !== null && metricsDaily?.cls !== undefined
                 ? metricsDaily.cls.toFixed(2)
@@ -194,10 +194,56 @@ export default async function SiteDetailPage({
         </dl>
         {metricsDaily && metricsDaily.lcp_ms === null ? (
           <p className="mt-2 text-xs text-[var(--color-text-muted)]">
-            Sin Core Web Vitals: Google no tiene tráfico real suficiente de
-            esta web para medirlas (field data de Chrome).
+            Sin Core Web Vitals: Google solo las publica para webs con tráfico
+            suficiente de usuarios reales de Chrome, y esta todavía no llega.
           </p>
         ) : null}
+
+        <h3 className="mt-6 text-sm font-semibold">
+          Prueba de laboratorio{" "}
+          <span className="font-normal text-[var(--color-text-muted)]">
+            · simulada, móvil
+          </span>
+        </h3>
+        <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+          Una sola carga de la portada en un móvil y una red simulados por
+          Google (Lighthouse). Sirve para detectar problemas y comparar día a
+          día; no es lo que viven los usuarios reales.
+        </p>
+        {metricsDaily?.lab_performance_score !== null &&
+        metricsDaily?.lab_performance_score !== undefined ? (
+          <dl className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <div className="rounded-lg border border-dashed border-[var(--color-border-strong)] p-3">
+              <dt className="text-xs text-[var(--color-text-muted)]">Rendimiento</dt>
+              <dd className="mt-1 font-mono text-sm tabular-nums">
+                {metricsDaily.lab_performance_score} / 100
+              </dd>
+            </div>
+            <div className="rounded-lg border border-dashed border-[var(--color-border-strong)] p-3">
+              <dt className="text-xs text-[var(--color-text-muted)]">LCP simulado</dt>
+              <dd className="mt-1 font-mono text-sm tabular-nums">
+                {metricsDaily.lab_lcp_ms !== null ? `${metricsDaily.lab_lcp_ms} ms` : "No disponible"}
+              </dd>
+            </div>
+            <div className="rounded-lg border border-dashed border-[var(--color-border-strong)] p-3">
+              <dt className="text-xs text-[var(--color-text-muted)]">CLS simulado</dt>
+              <dd className="mt-1 font-mono text-sm tabular-nums">
+                {metricsDaily.lab_cls !== null ? metricsDaily.lab_cls.toFixed(3) : "No disponible"}
+              </dd>
+            </div>
+            <div className="rounded-lg border border-dashed border-[var(--color-border-strong)] p-3">
+              <dt className="text-xs text-[var(--color-text-muted)]">Bloqueo total (TBT)</dt>
+              <dd className="mt-1 font-mono text-sm tabular-nums">
+                {metricsDaily.lab_tbt_ms !== null ? `${metricsDaily.lab_tbt_ms} ms` : "No disponible"}
+              </dd>
+            </div>
+          </dl>
+        ) : (
+          <p className="mt-3 text-sm text-[var(--color-text-muted)]">
+            Sin prueba de laboratorio todavía: se ejecuta en la comprobación
+            diaria de las 3:00.
+          </p>
+        )}
       </section>
 
       {site.platform === "wordpress" ? (

@@ -84,8 +84,15 @@ en dos capas independientes, y la capa externa tiene que dar valor por sí sola.
 | Tiempo de respuesta | Misma petición | 5 min |
 | Caducidad del certificado SSL | Handshake TLS | 1 vez al día |
 | Core Web Vitals (LCP, INP, CLS) móvil | PageSpeed Insights API | 1 vez al día |
+| Prueba de laboratorio móvil (puntuación, LCP, CLS, TBT) | Misma llamada a PageSpeed (Lighthouse) | 1 vez al día |
 | Captura de la portada | Misma llamada a PageSpeed (`final-screenshot`) | 1 vez al día |
 | Cabeceras de seguridad presentes | Misma petición HTTP | 1 vez al día |
+
+**Campo y laboratorio no se mezclan.** Las Core Web Vitals son datos de campo (CrUX):
+usuarios reales de Chrome, 28 días. Google solo los publica para webs con tráfico
+suficiente; si no los hay, se guardan `null`. La prueba de laboratorio de Lighthouse es
+una sola carga simulada: se guarda en columnas propias (`lab_*`) y la interfaz la
+etiqueta siempre como "simulada". Nunca rellena el hueco de un dato de campo.
 
 ### Capa B — Interna WordPress (opcional, aporta el detalle)
 
@@ -188,7 +195,9 @@ checks(
 metrics_daily(
   site_id, day date, uptime_pct numeric, checks_total int, checks_failed int,
   response_ms_avg int, response_ms_p95 int,
-  lcp_ms int, inp_ms int, cls numeric,
+  lcp_ms int, inp_ms int, cls numeric,                -- campo (CrUX); null si Google no tiene datos
+  lab_performance_score int,                          -- laboratorio (Lighthouse móvil), 0–100
+  lab_lcp_ms int, lab_cls numeric, lab_tbt_ms int,
   ssl_expires_at timestamptz,
   primary key (site_id, day)
 )

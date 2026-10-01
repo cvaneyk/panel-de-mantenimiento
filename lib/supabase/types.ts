@@ -86,6 +86,10 @@ export type MetricsDaily = {
   lcp_ms: number | null;
   inp_ms: number | null;
   cls: number | null;
+  lab_performance_score: number | null;
+  lab_lcp_ms: number | null;
+  lab_cls: number | null;
+  lab_tbt_ms: number | null;
   ssl_expires_at: string | null;
 };
 
